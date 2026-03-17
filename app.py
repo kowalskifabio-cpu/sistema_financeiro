@@ -9,7 +9,7 @@ import io
 # CONFIGURAÇÃO DA PÁGINA
 st.set_page_config(page_title="Labor Business Pro", layout="wide")
 
-# ID DA PLANILHA (Confirmado no seu histórico)
+# ID DA PLANILHA
 ID_DA_PLANILHA = "1FLCbuzrg1UL1yatdIas6aDBBjhc__mebdhUYxIt0NQk"
 
 def conectar_planilha():
@@ -46,36 +46,36 @@ def check_password():
 
 def processar_ofx(uploaded_file):
     """
-    DIAGNÓSTICO: O Streamlit entrega o arquivo como string ou bytes.
-    SOLUÇÃO: Usamos .getvalue() e garantimos que o conteúdo vire texto sem usar .decode().
+    DIAGNÓSTICO DEFINITIVO: 
+    O erro 'str object has no attribute decode' prova que o arquivo já é string.
+    SOLUÇÃO: Forçamos a leitura como texto sem nenhuma tentativa de decodificação.
     """
     try:
-        # Pega o conteúdo bruto
-        conteudo_bruto = uploaded_file.getvalue()
+        # Lemos o conteúdo do arquivo
+        conteudo = uploaded_file.read()
         
-        # Se for bytes, transformamos em texto. Se já for texto, ignoramos o decode.
-        if isinstance(conteudo_bruto, bytes):
-            # Usamos o 'replace' para evitar quebra por caracteres especiais
-            conteudo_texto = conteudo_bruto.decode('utf-8', errors='replace')
-        else:
-            conteudo_texto = conteudo_bruto
+        # Se por acaso vier em bytes, convertemos. Se for string, o try/except ignora o erro.
+        try:
+            texto_ofx = conteudo.decode('utf-8', errors='ignore')
+        except:
+            texto_ofx = conteudo
             
-        # LIMPEZA DO CABEÇALHO DO C6 BANK (O ponto onde o parser trava)
-        linhas = conteudo_texto.splitlines()
+        # LIMPEZA DO CABEÇALHO (O seu arquivo C6 tem espaços que travam o parser)
+        linhas = texto_ofx.splitlines()
         linhas_limpas = []
         for linha in linhas:
             if ":" in linha and "<" not in linha:
                 # Transforma "ENCODING: UTF - 8" em "ENCODING:UTF-8"
-                chave, valor = linha.split(":", 1)
-                linhas_limpas.append(f"{chave.strip()}:{valor.replace(' ', '').strip()}")
+                partes = linha.split(":", 1)
+                linhas_limpas.append(f"{partes[0].strip()}:{partes[1].replace(' ', '').strip()}")
             else:
                 linhas_limpas.append(linha)
         
-        texto_final = "\n".join(linhas_limpas)
+        ofx_final = "\n".join(linhas_limpas)
         
         # PARSER
         parser = OFXTree()
-        parser.parse(io.StringIO(texto_final))
+        parser.parse(io.StringIO(ofx_final))
         rec = parser.convert()
         stmt = rec.statements[0]
         
@@ -115,7 +115,7 @@ if check_password():
                             sh = gc.open_by_key(ID_DA_PLANILHA)
                             ws = sh.get_worksheet(0)
                             
-                            # Anti-duplicidade
+                            # Lógica Anti-duplicidade
                             registros = ws.get_all_records()
                             df_planilha = pd.DataFrame(registros)
                             
@@ -126,21 +126,20 @@ if check_password():
                             
                             if not novos.empty:
                                 ws.append_rows(novos.values.tolist())
-                                st.success(f"{len(novos)} lançamentos gravados com sucesso!")
+                                st.success(f"Sucesso! {len(novos)} lançamentos gravados.")
                             else:
-                                st.warning("Todos os dados já existem na planilha.")
+                                st.warning("Dados já existem na planilha.")
                         except Exception as e:
-                            st.error(f"Erro ao gravar: {e}")
+                            st.error(f"Erro ao acessar planilha: {e}")
 
     elif menu == "Resumo":
-        st.title("📊 Gestão de Caixa")
-        # Gráficos e Saldos (Mantidos conforme sua estrutura original)
-        st.write("Visualização de saldos em Sicredi, Caixa e Caixinha.")
+        st.title("📊 Resumo Financeiro")
+        st.write("Saldos e Fluxo de Caixa.")
 
     elif menu == "Relatório Mensal":
-        st.title("📊 Painel de Acompanhamento")
-        st.write("Relatórios de receitas e custos operacionais.")
+        st.title("📊 Relatórios DRE")
+        st.write("Acompanhamento mensal de resultados.")
 
     elif menu == "Cadastros":
         st.title("⚙️ Configurações")
-        st.write("Gerenciamento de Plano de Contas e Bancos.")
+        st.write("Plano de Contas e Bancos.")
