@@ -14,6 +14,18 @@ st.set_page_config(page_title="Labor Business Pro", layout="wide")
 # CONFIGURAÇÕES GERAIS
 # =========================================================
 ID_DA_PLANILHA = "1FLCbuzrg1UL1yatdIas6aDBBjhc__mebdhUYxIt0NQk"
+NOME_ABA_LANCAMENTOS = "Lancamentos"
+
+# Cabeçalho real da sua aba Lancamentos
+CABECALHO_LANCAMENTOS = [
+    "Data",
+    "Descricao",
+    "Valor",
+    "Categoria_ID",
+    "Centro_Custo_ID",
+    "Conta_ID",
+    "Documento_ID"
+]
 
 
 # =========================================================
@@ -107,7 +119,6 @@ def limpar_header_ofx(texto_ofx):
     for linha in linhas:
         linha_strip = linha.strip()
 
-        # corrige apenas linhas do header OFX clássico
         if ":" in linha_strip and "<" not in linha_strip:
             partes = linha_strip.split(":", 1)
             chave = partes[0].strip()
@@ -207,15 +218,18 @@ def processar_ofx(uploaded_file):
             checknum = extrair_tag(bloco, "CHECKNUM")
 
             descricao = memo or name or trntype or ""
-            documento = refnum or checknum or ""
+            documento = refnum or checknum or fitid or ""
 
             transacoes.append({
                 "Data": formatar_data_ofx(dtposted),
+                "Descricao": str(descricao).strip(),
                 "Valor": para_float(trnamt),
+                "Categoria_ID": "",
+                "Centro_Custo_ID": "",
+                "Conta_ID": "",
+                "Documento_ID": str(documento).strip(),
                 "FITID": str(fitid).strip(),
-                "Descrição": str(descricao).strip(),
-                "Tipo": str(trntype).strip(),
-                "Documento": str(documento).strip()
+                "Tipo": str(trntype).strip()
             })
 
         df = pd.DataFrame(transacoes)
@@ -224,9 +238,9 @@ def processar_ofx(uploaded_file):
             df = df[
                 ~(
                     df["Data"].eq("") &
-                    df["FITID"].eq("") &
-                    df["Descrição"].eq("") &
-                    df["Valor"].eq(0.0)
+                    df["Descricao"].eq("") &
+                    df["Valor"].eq(0.0) &
+                    df["Documento_ID"].eq("")
                 )
             ].copy()
 
@@ -240,22 +254,35 @@ def processar_ofx(uploaded_file):
 # =========================================================
 # PLANILHA
 # =========================================================
-def garantir_cabecalho_planilha(ws):
-    cabecalho_esperado = ["Data", "Valor", "FITID", "Descrição", "Tipo", "Documento"]
+def obter_aba_lancamentos(sh):
+    """
+    Obtém a aba 'Lancamentos'. Se não existir, cria.
+    """
+    try:
+        return sh.worksheet(NOME_ABA_LANCAMENTOS)
+    except Exception:
+        return sh.add_worksheet(title=NOME_ABA_LANCAMENTOS, rows=2000, cols=20)
 
+
+def garantir_cabecalho_planilha(ws):
+    """
+    Garante o cabeçalho correto na aba Lancamentos.
+    """
     try:
         valores = ws.get_all_values()
 
         if not valores:
-            ws.append_row(cabecalho_esperado)
-            return cabecalho_esperado
+            ws.append_row(CABECALHO_LANCAMENTOS)
+            return CABECALHO_LANCAMENTOS
 
         primeira_linha = valores[0]
-        if primeira_linha != cabecalho_esperado:
+
+        if primeira_linha[:len(CABECALHO_LANCAMENTOS)] != CABECALHO_LANCAMENTOS:
             st.warning(
-                "A primeira linha da planilha está diferente do esperado. "
-                f"Esperado: {cabecalho_esperado} | Encontrado: {primeira_linha}"
+                "O cabeçalho da aba 'Lancamentos' está diferente do esperado. "
+                f"Esperado: {CABECALHO_LANCAMENTOS} | Encontrado: {primeira_linha}"
             )
+
         return primeira_linha
 
     except Exception as e:
@@ -264,14 +291,17 @@ def garantir_cabecalho_planilha(ws):
 
 
 def carregar_dados_planilha(ws):
+    """
+    Carrega os registros da aba Lancamentos.
+    """
     try:
         registros = ws.get_all_records()
         if not registros:
-            return pd.DataFrame(columns=["Data", "Valor", "FITID", "Descrição", "Tipo", "Documento"])
+            return pd.DataFrame(columns=CABECALHO_LANCAMENTOS)
         return pd.DataFrame(registros)
     except Exception as e:
         st.error(f"Erro ao carregar dados da planilha: {type(e).__name__}: {e}")
-        return pd.DataFrame()
+        return pd.DataFrame(columns=CABECALHO_LANCAMENTOS)
 
 
 def gravar_transacoes_na_planilha(df_import):
@@ -281,7 +311,7 @@ def gravar_transacoes_na_planilha(df_import):
 
     try:
         sh = gc.open_by_key(ID_DA_PLANILHA)
-        ws = sh.get_worksheet(0)
+        ws = obter_aba_lancamentos(sh)
 
         garantir_cabecalho_planilha(ws)
         df_planilha = carregar_dados_planilha(ws)
@@ -290,31 +320,60 @@ def gravar_transacoes_na_planilha(df_import):
             st.warning("Não há dados para gravar.")
             return
 
-        colunas_necessarias = ["Data", "Valor", "FITID", "Descrição", "Tipo", "Documento"]
-        colunas_faltantes = [c for c in colunas_necessarias if c not in df_import.columns]
+        colunas_necessarias = [
+            "Data",
+            "Descricao",
+            "Valor",
+            "Categoria_ID",
+            "Centro_Custo_ID",
+            "Conta_ID",
+            "Documento_ID",
+            "FITID"
+        ]
 
+        colunas_faltantes = [c for c in colunas_necessarias if c not in df_import.columns]
         if colunas_faltantes:
             st.error(f"Colunas faltantes no arquivo importado: {colunas_faltantes}")
             return
 
         df_import = df_import.copy()
         df_import["FITID"] = df_import["FITID"].astype(str).str.strip()
+        df_import["Documento_ID"] = df_import["Documento_ID"].astype(str).str.strip()
 
-        if not df_planilha.empty and "FITID" in df_planilha.columns:
-            df_planilha["FITID"] = df_planilha["FITID"].astype(str).str.strip()
-            novos = df_import[~df_import["FITID"].isin(df_planilha["FITID"])]
+        # Anti-duplicidade:
+        # 1) se existir Documento_ID na planilha, compara por ele
+        # 2) se não existir, usa combinação Data + Valor + Descricao
+        if not df_planilha.empty:
+            if "Documento_ID" in df_planilha.columns:
+                df_planilha["Documento_ID"] = df_planilha["Documento_ID"].astype(str).str.strip()
+                novos = df_import[~df_import["Documento_ID"].isin(df_planilha["Documento_ID"])]
+            else:
+                chave_import = (
+                    df_import["Data"].astype(str).str.strip() + "|" +
+                    df_import["Valor"].astype(str).str.strip() + "|" +
+                    df_import["Descricao"].astype(str).str.strip()
+                )
+
+                chave_planilha = (
+                    df_planilha.get("Data", pd.Series(dtype=str)).astype(str).str.strip() + "|" +
+                    df_planilha.get("Valor", pd.Series(dtype=str)).astype(str).str.strip() + "|" +
+                    df_planilha.get("Descricao", pd.Series(dtype=str)).astype(str).str.strip()
+                )
+
+                novos = df_import[~chave_import.isin(chave_planilha)]
         else:
             novos = df_import.copy()
 
         if novos.empty:
-            st.warning("Nenhuma transação nova. Todos os FITIDs já existem na planilha.")
+            st.warning("Nenhuma transação nova. Os registros já existem na aba 'Lancamentos'.")
             return
 
-        novos = novos[["Data", "Valor", "FITID", "Descrição", "Tipo", "Documento"]]
+        # Mantém apenas as colunas do layout da aba Lancamentos
+        novos = novos[CABECALHO_LANCAMENTOS]
         linhas = novos.values.tolist()
 
         ws.append_rows(linhas, value_input_option="USER_ENTERED")
-        st.success(f"Sucesso. {len(novos)} lançamentos gravados na planilha.")
+        st.success(f"Sucesso. {len(novos)} lançamentos gravados na aba '{NOME_ABA_LANCAMENTOS}'.")
 
     except Exception as e:
         st.error(f"Erro ao acessar/gravar na planilha: {type(e).__name__}: {e}")
@@ -341,7 +400,10 @@ if check_password():
 
             if not df_import.empty:
                 st.subheader("Transações Detectadas")
-                st.dataframe(df_import, use_container_width=True)
+
+                # Exibição amigável na tela
+                colunas_exibicao = ["Data", "Descricao", "Valor", "Tipo", "Documento_ID"]
+                st.dataframe(df_import[colunas_exibicao], use_container_width=True)
 
                 col1, col2 = st.columns(2)
                 with col1:
