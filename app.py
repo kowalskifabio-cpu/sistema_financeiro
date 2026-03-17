@@ -9,7 +9,7 @@ import io
 # CONFIGURAÇÃO DA PÁGINA
 st.set_page_config(page_title="Labor Business Pro", layout="wide")
 
-# ID DA PLANILHA (Fornecido pelo usuário)
+# ID DA PLANILHA (Fornecido pelo utilizador)
 ID_DA_PLANILHA = "1FLCbuzrg1UL1yatdIas6aDBBjhc__mebdhUYxIt0NQk"
 
 def conectar_planilha():
@@ -19,7 +19,6 @@ def conectar_planilha():
         if "gcp_service_account" in st.secrets:
             creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=scope)
         else:
-            # Fallback para dicionário local (se configurado)
             st.error("Erro: Bloco [gcp_service_account] não encontrado nos Secrets.")
             return None
         client = gspread.authorize(creds)
@@ -30,13 +29,13 @@ def conectar_planilha():
 
 # 2. SISTEMA DE LOGIN
 def check_password():
-    """Gerencia a autenticação do usuário."""
+    """Gere a autenticação do utilizador."""
     if "authenticated" not in st.session_state:
         st.session_state["authenticated"] = False
     
     if not st.session_state["authenticated"]:
         st.title("🔐 Sistema Labor Business")
-        user = st.text_input("Usuário")
+        user = st.text_input("Utilizador")
         password = st.text_input("Senha", type="password")
         
         if st.button("Entrar"):
@@ -44,30 +43,35 @@ def check_password():
                 st.session_state["authenticated"] = True
                 st.rerun()
             else:
-                st.error("Usuário ou senha incorretos")
+                st.error("Utilizador ou senha incorretos")
         return False
     return True
 
-# 3. PROCESSAMENTO DE ARQUIVO OFX (Corrigido para evitar erro de Header)
+# 3. PROCESSAMENTO DE ARQUIVO OFX (Corrigido para evitar erro de Header e Decode)
 def processar_ofx(uploaded_file):
-    """Lê o arquivo OFX, limpa o cabeçalho malformado e extrai as transações."""
+    """Lê o arquivo OFX, trata erros de decode e limpa o cabeçalho malformado."""
     try:
-        # Lê o conteúdo do arquivo e remove espaços em branco extras que causam erro no header
-        content = uploaded_file.read().decode('utf-8')
+        # Lê o conteúdo lidando com bytes ou strings
+        raw_data = uploaded_file.read()
+        if isinstance(raw_data, bytes):
+            content = raw_data.decode('utf-8', errors='ignore')
+        else:
+            content = raw_data
+            
         lines = content.splitlines()
         
-        # Reconstrói o arquivo garantindo que não haja espaços entre o nome do campo e o valor no header
+        # Reconstrói o arquivo garantindo a formatação correta do header
         clean_lines = []
         for line in lines:
             if ":" in line and "<" not in line:
-                key, value = line.split(":", 1)
-                clean_lines.append(f"{key.strip()}:{value.strip()}")
+                parts = line.split(":", 1)
+                clean_lines.append(f"{parts[0].strip()}:{parts[1].strip()}")
             else:
                 clean_lines.append(line)
         
         clean_content = "\n".join(clean_lines)
         
-        # Processa o conteúdo limpo
+        # Processa o conteúdo com a biblioteca ofxtools
         parser = OFXTree()
         parser.parse(io.StringIO(clean_content))
         rec = parser.convert()
@@ -99,7 +103,7 @@ if check_password():
         with col1:
             st.subheader("Saldos Atuais")
             df_saldos = pd.DataFrame({
-                'Conta': ['Sicredi - Conta Corrente', 'Caixa Econômica Federal', 'Caixinha'],
+                'Conta': ['Sicredi - Conta Corrente', 'Caixa Económica Federal', 'Caixinha'],
                 'Saldo': [113901.84, 67900.49, 4174.42]
             })
             st.table(df_saldos)
@@ -121,7 +125,6 @@ if check_password():
         uploaded_file = st.file_uploader("Selecione o arquivo .ofx", type=['ofx'])
         
         if uploaded_file:
-            # Passamos o objeto do arquivo para a função de tratamento
             df_import = processar_ofx(uploaded_file)
             
             if not df_import.empty:
@@ -150,7 +153,7 @@ if check_password():
                         except Exception as e:
                             st.error(f"Erro ao gravar na planilha: {e}")
 
-    # --- ABA: RELATÓRIO MENSAL ---
+    # --- ABA: RELATÓRIO MENSAL (Conforme imagem do Nibo) ---
     elif menu == "Relatório Mensal":
         st.title("📊 Painel de Acompanhamento (DRE)")
         centro_filtro = st.multiselect("Filtrar por Centro de Custo", ["Administrativo", "Produção", "Vendas"])
@@ -177,10 +180,10 @@ if check_password():
         with tab1:
             nome_cat = st.text_input("Nome da Conta")
             if st.button("Confirmar Categoria"):
-                st.success(f"Categoria {nome_cat} registrada.")
+                st.success(f"Categoria {nome_cat} registada.")
         with tab2:
             novo_cc = st.text_input("Nome do Centro de Custo")
             if st.button("Confirmar Centro"):
-                st.success(f"Centro {novo_cc} registrado.")
+                st.success(f"Centro {novo_cc} registado.")
         with tab3:
             st.write("- Sicredi | - Caixa Federal | - Caixinha")
