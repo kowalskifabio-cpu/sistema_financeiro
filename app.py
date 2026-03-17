@@ -31,11 +31,12 @@ CABECALHO_LANCAMENTOS = [
 ]
 
 CABECALHO_CONTAS = ["ID", "Nome_Conta", "Banco", "Saldo_Inicial"]
-CABECALHO_CATEGORIAS = ["ID", "Nome_Categoria", "Tipo"]
+# Atualizado para suportar a estrutura de Código (ex: 30101001)
+CABECALHO_CATEGORIAS = ["Codigo", "Nome_Categoria", "Tipo"]
 CABECALHO_CENTROS = ["ID", "Nome_Centro"]
 
 # =========================================================
-# FUNÇÕES DE FORMATAÇÃO BRASILEIRA
+# FUNÇÕES DE FORMATAÇÃO E ESTRUTURA HIERÁRQUICA
 # =========================================================
 def formatar_moeda_br(valor):
     """Formata float para string R$ 00.000,00"""
@@ -44,6 +45,22 @@ def formatar_moeda_br(valor):
         return total_fmt
     except:
         return "R$ 0,00"
+
+def identificar_nivel(codigo):
+    """
+    Identifica o nível com base no código:
+    3           -> Nível 1
+    301         -> Nível 2
+    30101       -> Nível 3
+    30101001    -> Nível 4 (Analítico)
+    """
+    cod_str = str(codigo).strip()
+    tam = len(cod_str)
+    if tam == 1: return 1
+    if tam == 3: return 2
+    if tam == 5: return 3
+    if tam == 8: return 4
+    return 0
 
 # =========================================================
 # GOOGLE SHEETS
@@ -358,7 +375,6 @@ if check_password():
                 if not df_import.empty:
                     st.subheader("Transações Detectadas")
                     
-                    # Vínculo com Banco: Seleção obrigatória da conta no momento da importação
                     conta_sel = st.selectbox(
                         "Selecione a Conta Bancária deste Extrato:", 
                         df_contas["Nome_Conta"].tolist() if not df_contas.empty else ["Nenhuma conta cadastrada"]
@@ -366,7 +382,6 @@ if check_password():
                     
                     df_import["Conta_ID"] = conta_sel
 
-                    # Exibição amigável na tela
                     colunas_exibicao = ["Data", "Descricao", "Valor", "Tipo", "Documento_ID"]
                     st.dataframe(df_import[colunas_exibicao], use_container_width=True)
 
@@ -393,7 +408,6 @@ if check_password():
             st.info("Abaixo estão os lançamentos importados que ainda não possuem Categoria ou Centro de Custo definidos.")
 
             if not df_lancamentos.empty:
-                # Filtra lançamentos não conciliados (vazios em Categoria ou Centro de Custo)
                 mascara_pendente = (df_lancamentos["Categoria_ID"] == "") | (df_lancamentos["Centro_Custo_ID"] == "")
                 df_pendente = df_lancamentos[mascara_pendente].copy()
 
@@ -402,11 +416,9 @@ if check_password():
                 else:
                     st.write(f"Total pendente: {len(df_pendente)}")
                     
-                    # Preparar listas para selects
                     lista_categorias = [""] + df_categorias["Nome_Categoria"].tolist() if not df_categorias.empty else [""]
                     lista_centros = [""] + df_centros["Nome_Centro"].tolist() if not df_centros.empty else [""]
 
-                    # Interface de edição linha a linha
                     with st.form("form_conciliacao"):
                         atualizacoes = []
                         for idx, row in df_pendente.iterrows():
@@ -420,7 +432,7 @@ if check_password():
                             
                             if nova_cat != "" or novo_centro != "":
                                 atualizacoes.append({
-                                    "index_planilha": idx + 2, # +1 header +1 index 0
+                                    "index_planilha": idx + 2,
                                     "categoria": nova_cat if nova_cat != "" else row["Categoria_ID"],
                                     "centro": novo_centro if novo_centro != "" else row["Centro_Custo_ID"]
                                 })
@@ -429,7 +441,6 @@ if check_password():
                         if st.form_submit_button("✅ Salvar Conciliação"):
                             ws_lanc = obter_aba(sh, NOME_ABA_LANCAMENTOS, CABECALHO_LANCAMENTOS)
                             for acao in atualizacoes:
-                                # Coluna 4 (D) é Categoria_ID, Coluna 5 (E) é Centro_Custo_ID
                                 ws_lanc.update_cell(acao["index_planilha"], 4, acao["categoria"])
                                 ws_lanc.update_cell(acao["index_planilha"], 5, acao["centro"])
                             st.success("Lançamentos conciliados com sucesso!")
@@ -451,7 +462,6 @@ if check_password():
                         saldos_view.append({"Conta": nome, "Saldo": inicial + movimentacao})
                     
                     df_saldos_final = pd.DataFrame(saldos_view)
-                    # Formatação brasileira na tabela
                     df_saldos_exibicao = df_saldos_final.copy()
                     df_saldos_exibicao["Saldo"] = df_saldos_exibicao["Saldo"].apply(formatar_moeda_br)
                     st.table(df_saldos_exibicao)
@@ -463,23 +473,55 @@ if check_password():
                 st.info("Cadastre uma conta bancária para ver os saldos.")
 
         elif menu == "Relatório Mensal":
-            st.title("📊 Relatórios Realizado (DRE)")
-            if not df_lancamentos.empty:
-                # Criar coluna de mês/ano para o Pivot
+            st.title("📊 Relatórios Realizado (DRE Hierárquico)")
+            if not df_lancamentos.empty and not df_categorias.empty:
                 df_lancamentos["Mes_Ano"] = pd.to_datetime(df_lancamentos["Data"], dayfirst=True).dt.strftime('%Y-%m')
                 df_lancamentos["Valor"] = df_lancamentos["Valor"].astype(float)
                 
-                relatorio_pivot = df_lancamentos.pivot_table(
-                    index="Categoria_ID", 
+                # Mapeamento para buscar código por nome
+                map_cat_para_cod = dict(zip(df_categorias["Nome_Categoria"], df_categorias["Codigo"]))
+                df_lancamentos["Codigo"] = df_lancamentos["Categoria_ID"].map(map_cat_para_cod)
+                
+                # Somente analíticos (nível 4) entram no Pivot inicial
+                df_pivot_base = df_lancamentos.pivot_table(
+                    index="Codigo", 
                     columns="Mes_Ano", 
                     values="Valor", 
                     aggfunc="sum", 
                     fill_value=0
                 )
-                # Formatação brasileira no DataFrame
-                st.dataframe(relatorio_pivot.applymap(formatar_moeda_br), use_container_width=True)
+                
+                meses = sorted(df_pivot_base.columns.tolist())
+                dados_relatorio = []
+                
+                # Ordenar Plano de Contas pelo Código
+                df_cats_sorted = df_categorias.sort_values(by="Codigo")
+                
+                for _, row_cat in df_cats_sorted.iterrows():
+                    cod = str(row_cat["Codigo"])
+                    nome = row_cat["Nome_Categoria"]
+                    nivel = identificar_nivel(cod)
+                    
+                    linha = {"Código": cod, "Descrição": ("  " * (nivel - 1)) + nome}
+                    
+                    for mes in meses:
+                        # Se for analítico (nível 4), pega o valor direto. 
+                        # Se for totalizador, soma todos os analíticos que começam com esse prefixo.
+                        if nivel == 4:
+                            valor = df_pivot_base.loc[cod, mes] if cod in df_pivot_base.index else 0
+                        else:
+                            # Soma todas as contas analíticas (len 8) que descendem deste código
+                            mask = (df_pivot_base.index.astype(str).str.startswith(cod))
+                            valor = df_pivot_base[mask][mes].sum()
+                        
+                        linha[mes] = valor
+                    
+                    dados_relatorio.append(linha)
+                
+                df_final_rel = pd.DataFrame(dados_relatorio)
+                st.dataframe(df_final_rel.style.format({m: formatar_moeda_br for m in meses}), use_container_width=True)
             else:
-                st.info("Sem dados de lançamentos para gerar o relatório.")
+                st.info("Sem dados de lançamentos ou categorias para gerar o relatório.")
 
         elif menu == "Cadastros":
             st.title("⚙️ Gestão de Cadastros")
@@ -499,16 +541,18 @@ if check_password():
                 st.dataframe(df_contas)
 
             with tab_cats:
-                st.subheader("Nova Categoria")
+                st.subheader("Estrutura do Plano de Contas")
+                st.write("Exemplo: 3 (Resultado) > 301 (Vendas) > 30101 (Produtos) > 30101001 (Notebooks)")
                 with st.form("form_cats"):
+                    c_codigo = st.text_input("Código da Conta")
                     n_cat = st.text_input("Nome da Categoria")
                     t_cat = st.selectbox("Tipo", ["Receita", "Despesa"])
                     if st.form_submit_button("Salvar Categoria"):
                         ws_cats = obter_aba(sh, NOME_ABA_CATEGORIAS, CABECALHO_CATEGORIAS)
-                        ws_cats.append_row([len(df_categorias)+1, n_cat, t_cat])
+                        ws_cats.append_row([c_codigo, n_cat, t_cat])
                         st.success("Categoria cadastrada!")
                         st.rerun()
-                st.dataframe(df_categorias)
+                st.dataframe(df_categorias.sort_values(by="Codigo"))
 
             with tab_centros:
                 st.subheader("Novo Centro de Custo")
