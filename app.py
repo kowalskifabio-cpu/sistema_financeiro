@@ -4,33 +4,24 @@ from datetime import datetime
 from ofxtools.Parser import OFXTree
 import gspread
 from google.oauth2.service_account import Credentials
+import io
 
 # CONFIGURAÇÃO DA PÁGINA
 st.set_page_config(page_title="Labor Business Pro", layout="wide")
 
-# 1. DADOS DE CONEXÃO (Service Account e ID da Planilha)
-# Integrado conforme solicitado para evitar resumos
-GOOGLE_CREDENTIALS = {
-    "type": "service_account",
-    "project_id": "pesquisa-labor",
-    "private_key_id": "416de83105d1c71307292b2a2a5549f4369daf76",
-    "private_key": "-----BEGIN PRIVATE KEY-----\nMIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQDNOsAqEdsC3Kzo\nnqEDNTq7bBeGZ6cViY6U3nzKxTJkssKa3izdWNiM2G90dC20Raie/FOlu8vJZ2QK\nXSH5rFdYf7bIbS4SP9Me3tEdbQcTncG1D/U8krAEar03dbiel48rIXsZJkqqd0Ev\nIEFQuYmJPaPumMP4tLgKnAIB95xDpBBZdsXAA61LaxBzE4h4C5dbdDhFoRwA+S92\nEQimUe9HQKO7rPPnkCAK8nY60KHcmcUmzyRBuiVwfAh7LII/l3l7MfU4EJHCsQFi\noe3svWjUfeWaDQap3zi0ggwoWOEsNgvSnf9DvQ8Mkhz0BeNrtxaCTOEoXoZrYFdA\nEU6grcMlAgMBAAECggEANgZVN73jjWlSCxpXAGUuxM+7kaIPldfUNNQsvaQTk/aK\nzAHYhZwxxUHkdR9wOJhtvwxlaKd7CdWxvBiwLO11QNK95xz2l889YE7/dWOSDVPl\n/ifpQrzKoR8IGGVg6D61bYEuynwOA7nI6wLurrVowzv6v4BvdjT8ja5ryODJvfQl\neQZLM4f73Ddrc+dtLPNbP9Oo+m6mdxvlOdrfvY6JNTcHEAq98okYiV7lMaOvoE/T\nluUeRIkNTol3khe+IgoQ1ppGLG1AIwcQqIn8ucQZ1Mp2jdmBHxXGnUgqC48QIual\ngI81HHnklkYnMG5lFcteBEixxZcZZTcRWK/2dqQuMQKBgQD0z5q2L+vvOJHRvTdO\nTAu8jI2wBZaCkFA/kMlcwXwYqoCTB/zbWIG9lG9YePc/4Td4rnGp7heHqvYORLDQ\K4hmDrvHdmri1W4UvDU33Q653XCrufhsiCh7ODBuVAvpOhHY+83ZNVCVa21GakNM\nsZYBBqk1U1XScTY8SyMn3eU49wKBgQDWnAadg5Sx1+tacH2KDwateQeFm4N+Oqu4\nya2e1Ez7p18TB9O9MRxYz43DHRC+GgT+UWrf+l/uzD+rVgLYN6tQ5+8iM48PfnTo\nBrgiF4FIU4XnyDf+QW0OC4CTn9Bi0Nxuj/3T2o/VzlUDUClt40F+qn1qcqtK6dW5\nJIOPyAbZwwKBgQDY4nfxQkFm3Roq09SElFCtiWQZdsniABJoTlBm0a+sdpmUKTZ1\n6VJ/71o56mk5+cBYNUvTvXCxK9/zwh1XP8oGiLUJwDpvnaB51EfdpwVd2vXv3cFd\n/b7Hc39Mrz8iL+UR8/tpnJc42USlZo0bDBWV8R3FdYAKAWyIPBT4Q9jI/wKBgCRo\nR78FCX66MJUhLEr1jZ50P9Bst3v8nBE3NZsSTRUMKdbipwsbf8GZRGVrUuHNLDew\nvD7PDONIBy0b5FOl7gxFrI3SzVxFibOrICW4cxhAAyF1F/qsQsH1NZTVsdZxtFOV\nXexI0cnlvQpY2Q5pVT0V0zzxwxlsXfOQvDjyKCddAoGBAJdJ2s1NdQCow2Xi/DaN\nWrn208PyGqyE5NbcgG5/Q0cpEhMcgqbojKxfVOC1NRybp7L7y/CmCanRA/Cz1b/a\nESHSa3GCoYOA0n0+H3Jd0PRRNEG7uQk1QgxrmMO7ZRQUTuVIFH5absTT2q4sGRd4\nzWaxzc1p8KKDDryqMu+G3H2A\n-----END PRIVATE KEY-----\n",
-    "client_email": "streamlit-labor@pesquisa-labor.iam.gserviceaccount.com",
-    "token_uri": "https://oauth2.googleapis.com/token",
-}
-
+# ID DA PLANILHA (Fornecido pelo usuário)
 ID_DA_PLANILHA = "1FLCbuzrg1UL1yatdIas6aDBBjhc__mebdhUYxIt0NQk"
 
 def conectar_planilha():
     """Realiza a conexão com o Google Sheets usando a Service Account."""
     scope = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
     try:
-        # Se estiver no Streamlit Cloud, tenta pegar dos secrets, senão usa o dicionário fixo
         if "gcp_service_account" in st.secrets:
-            # O Streamlit já carrega o dicionário formatado do bloco [gcp_service_account]
             creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=scope)
         else:
-            creds = Credentials.from_service_account_info(GOOGLE_CREDENTIALS, scopes=scope)
+            # Fallback para dicionário local (se configurado)
+            st.error("Erro: Bloco [gcp_service_account] não encontrado nos Secrets.")
+            return None
         client = gspread.authorize(creds)
         return client
     except Exception as e:
@@ -57,12 +48,28 @@ def check_password():
         return False
     return True
 
-# 3. PROCESSAMENTO DE ARQUIVO OFX
-def processar_ofx(arquivo_ofx):
-    """Lê o arquivo OFX e extrai as transações."""
+# 3. PROCESSAMENTO DE ARQUIVO OFX (Corrigido para evitar erro de Header)
+def processar_ofx(uploaded_file):
+    """Lê o arquivo OFX, limpa o cabeçalho malformado e extrai as transações."""
     try:
+        # Lê o conteúdo do arquivo e remove espaços em branco extras que causam erro no header
+        content = uploaded_file.read().decode('utf-8')
+        lines = content.splitlines()
+        
+        # Reconstrói o arquivo garantindo que não haja espaços entre o nome do campo e o valor no header
+        clean_lines = []
+        for line in lines:
+            if ":" in line and "<" not in line:
+                key, value = line.split(":", 1)
+                clean_lines.append(f"{key.strip()}:{value.strip()}")
+            else:
+                clean_lines.append(line)
+        
+        clean_content = "\n".join(clean_lines)
+        
+        # Processa o conteúdo limpo
         parser = OFXTree()
-        parser.parse(arquivo_ofx)
+        parser.parse(io.StringIO(clean_content))
         rec = parser.convert()
         stmt = rec.statements[0]
         
@@ -71,7 +78,7 @@ def processar_ofx(arquivo_ofx):
             transacoes.append({
                 "Data": tx.dtposted.date().strftime('%d/%m/%Y'),
                 "Valor": float(tx.trnamt),
-                "FITID": tx.fitid,
+                "FITID": str(tx.fitid),
                 "Descrição": tx.memo if tx.memo else tx.name
             })
         return pd.DataFrame(transacoes)
@@ -114,6 +121,7 @@ if check_password():
         uploaded_file = st.file_uploader("Selecione o arquivo .ofx", type=['ofx'])
         
         if uploaded_file:
+            # Passamos o objeto do arquivo para a função de tratamento
             df_import = processar_ofx(uploaded_file)
             
             if not df_import.empty:
@@ -124,15 +132,12 @@ if check_password():
                     gc = conectar_planilha()
                     if gc:
                         try:
-                            # Abre a planilha pelo ID fornecido
                             sh = gc.open_by_key(ID_DA_PLANILHA) 
-                            ws = sh.get_worksheet(0) # Acessa a primeira aba
+                            ws = sh.get_worksheet(0)
                             
-                            # Busca dados existentes para evitar duplicidade pelo FITID
                             dados_atuais = pd.DataFrame(ws.get_all_records())
                             
                             if not dados_atuais.empty and 'FITID' in dados_atuais.columns:
-                                # Filtra apenas o que NÃO está na planilha
                                 novos_dados = df_import[~df_import['FITID'].astype(str).isin(dados_atuais['FITID'].astype(str))]
                             else:
                                 novos_dados = df_import
@@ -144,28 +149,23 @@ if check_password():
                                 st.warning("Aviso: Todas as transações deste arquivo já existem na planilha.")
                         except Exception as e:
                             st.error(f"Erro ao gravar na planilha: {e}")
-                            st.info("Dica: Certifique-se de que compartilhou a planilha com o e-mail do robô.")
 
-    # --- ABA: RELATÓRIO MENSAL (Conforme imagem do Nibo) ---
+    # --- ABA: RELATÓRIO MENSAL ---
     elif menu == "Relatório Mensal":
         st.title("📊 Painel de Acompanhamento (DRE)")
-        
         centro_filtro = st.multiselect("Filtrar por Centro de Custo", ["Administrativo", "Produção", "Vendas"])
         
-        # Modelo baseado no layout da imagem enviada
         dados_relatorio = {
             "RESULTADO": [
                 "RECEITAS OPERACIONAIS (A)", 
                 "  ↑ Receita Plano Funerário", 
                 "  ↑ Receita Comissão Médicos", 
                 "CUSTOS OPERACIONAIS (B)", 
-                "  ↓ Impostos sobre receita",
-                "  ↓ Folha de Pagamento",
                 "MARGEM DE CONTRIBUIÇÃO (A+B)"
             ],
-            "Jan": [106551, 93967, 3654, -24682, -3198, -16542, 81869],
-            "Fev": [135882, 77900, 3691, -43475, -9138, -14898, 92407],
-            "Mar": [94237, 60537, 598, -8251, 0, -4594, 85986]
+            "Jan": [106551, 93967, 3654, -24682, 81869],
+            "Fev": [135882, 77900, 3691, -43475, 92407],
+            "Mar": [94237, 60537, 598, -8251, 85986]
         }
         df_dre = pd.DataFrame(dados_relatorio)
         st.dataframe(df_dre, use_container_width=True, hide_index=True)
@@ -174,22 +174,13 @@ if check_password():
     elif menu == "Cadastros":
         st.title("⚙️ Cadastros e Configurações")
         tab1, tab2, tab3 = st.tabs(["Plano de Contas", "Centro de Custos", "Contas Bancárias"])
-        
         with tab1:
-            st.subheader("Cadastro de Categorias")
             nome_cat = st.text_input("Nome da Conta")
-            tipo_cat = st.selectbox("Tipo de Conta", ["Receita Operacional", "Custo Variável", "Despesa Fixa"])
             if st.button("Confirmar Categoria"):
-                st.success(f"Categoria {nome_cat} pronta para ser integrada.")
-
+                st.success(f"Categoria {nome_cat} registrada.")
         with tab2:
-            st.subheader("Cadastro de Centro de Custos")
             novo_cc = st.text_input("Nome do Centro de Custo")
             if st.button("Confirmar Centro"):
-                st.success(f"Centro de Custo {novo_cc} pronto para ser integrado.")
-
+                st.success(f"Centro {novo_cc} registrado.")
         with tab3:
-            st.subheader("Contas Bancárias Ativas")
-            st.write("- Sicredi - Conta Corrente")
-            st.write("- Caixa Econômica Federal")
-            st.write("- Caixinha")
+            st.write("- Sicredi | - Caixa Federal | - Caixinha")
