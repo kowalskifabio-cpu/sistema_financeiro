@@ -27,6 +27,7 @@ def conectar_planilha():
     try:
         # Se estiver no Streamlit Cloud, tenta pegar dos secrets, senão usa o dicionário fixo
         if "gcp_service_account" in st.secrets:
+            # O Streamlit já carrega o dicionário formatado do bloco [gcp_service_account]
             creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=scope)
         else:
             creds = Credentials.from_service_account_info(GOOGLE_CREDENTIALS, scopes=scope)
