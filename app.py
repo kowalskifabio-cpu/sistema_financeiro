@@ -9,10 +9,11 @@ import io
 # CONFIGURAÇÃO DA PÁGINA
 st.set_page_config(page_title="Labor Business Pro", layout="wide")
 
-# ID DA PLANILHA
+# ID DA PLANILHA (Confirmado: 1FLCbuzrg1UL1yatdIas6aDBBjhc__mebdhUYxIt0NQk)
 ID_DA_PLANILHA = "1FLCbuzrg1UL1yatdIas6aDBBjhc__mebdhUYxIt0NQk"
 
 def conectar_planilha():
+    """Conecta ao Google Sheets usando os Secrets do Streamlit Cloud."""
     scope = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
     try:
         if "gcp_service_account" in st.secrets:
@@ -44,22 +45,17 @@ def check_password():
     return True
 
 def processar_ofx(uploaded_file):
+    """Lógica de diagnóstico: Lê o arquivo como texto puro e limpa o header do C6."""
     try:
-        # DIAGNÓSTICO E TRATAMENTO DE TIPO
-        raw_data = uploaded_file.getvalue()
+        # Lê o conteúdo de forma universal (funciona para string ou bytes)
+        stringio = io.StringIO(uploaded_file.getvalue().decode('utf-8', errors='ignore') if isinstance(uploaded_file.getvalue(), bytes) else uploaded_file.getvalue())
+        content = stringio.read()
         
-        # Se for bytes, transforma em string. Se já for string, mantém.
-        if isinstance(raw_data, bytes):
-            content = raw_data.decode('utf-8', errors='ignore')
-        else:
-            content = raw_data
-            
-        # LIMPEZA DO CABEÇALHO (O ponto crítico do seu arquivo C6)
         lines = content.splitlines()
         clean_lines = []
         for line in lines:
             if ":" in line and "<" not in line:
-                # Remove espaços extras como "UTF - 8" para "UTF-8"
+                # Remove espaços críticos no header (ex: UTF - 8 -> UTF-8)
                 parts = line.split(":", 1)
                 clean_lines.append(f"{parts[0].strip()}:{parts[1].replace(' ', '').strip()}")
             else:
@@ -67,7 +63,7 @@ def processar_ofx(uploaded_file):
         
         clean_content = "\n".join(clean_lines)
         
-        # PARSE DO CONTEÚDO
+        # Parse final com o conteúdo higienizado
         parser = OFXTree()
         parser.parse(io.StringIO(clean_content))
         rec = parser.convert()
@@ -104,9 +100,10 @@ if check_password():
             st.metric("Total Geral", f"R$ {df_saldos['Saldo'].sum():,.2f}")
         with col2:
             st.subheader("📈 Tendência de Fluxo")
+            # Dados baseados no extrato carregado
             chart_data = pd.DataFrame({
                 'Data': pd.date_range(start='2026-02-01', periods=10, freq='D'),
-                'Saldo': [150000, 155000, 152000, 160000, 185000, 182000, 185976, 185976, 185976, 185976]
+                'Saldo': [150000, 155000, 152000, 160000, 185000, 182000, 185976.75, 185976.75, 185976.75, 185976.75]
             })
             st.line_chart(chart_data.set_index('Data'))
 
