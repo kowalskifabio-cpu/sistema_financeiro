@@ -19,7 +19,7 @@ NOME_ABA_CONTAS = "Contas"
 NOME_ABA_CATEGORIAS = "Categorias"
 NOME_ABA_CENTROS = "Centros_Custo"
 
-# Cabeçalhos reais das abas
+# Cabeçalho real da sua aba Lancamentos
 CABECALHO_LANCAMENTOS = [
     "Data",
     "Descricao",
@@ -33,6 +33,17 @@ CABECALHO_LANCAMENTOS = [
 CABECALHO_CONTAS = ["ID", "Nome_Conta", "Banco", "Saldo_Inicial"]
 CABECALHO_CATEGORIAS = ["ID", "Nome_Categoria", "Tipo"]
 CABECALHO_CENTROS = ["ID", "Nome_Centro"]
+
+# =========================================================
+# FUNÇÕES DE FORMATAÇÃO BRASILEIRA
+# =========================================================
+def formatar_moeda_br(valor):
+    """Formata float para string R$ 00.000,00"""
+    try:
+        total_fmt = f"R$ {valor:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+        return total_fmt
+    except:
+        return "R$ 0,00"
 
 # =========================================================
 # GOOGLE SHEETS
@@ -57,6 +68,7 @@ def conectar_planilha():
     except Exception as e:
         st.error(f"Erro na conexão com Google Sheets: {type(e).__name__}: {e}")
         return None
+
 
 # =========================================================
 # LOGIN
@@ -310,7 +322,7 @@ def gravar_transacoes_na_planilha(df_import):
 
         novos_para_gravar = novos[CABECALHO_LANCAMENTOS]
         ws.append_rows(novos_para_gravar.values.tolist(), value_input_option="USER_ENTERED")
-        st.success(f"Sucesso. {len(novos)} lançamentos gravados.")
+        st.success(f"Sucesso. {len(novos)} lançamentos gravados na aba '{NOME_ABA_LANCAMENTOS}'.")
 
     except Exception as e:
         st.error(f"Erro ao gravar na planilha: {e}")
@@ -333,39 +345,97 @@ if check_password():
         st.sidebar.title("Navegação")
         menu = st.sidebar.radio(
             "Ir para:",
-            ["Resumo", "Relatório Mensal", "Importar Extrato", "Cadastros"]
+            ["Resumo", "Relatório Mensal", "Importar Extrato", "Conciliação Bancária", "Cadastros"]
         )
 
         if menu == "Importar Extrato":
-            st.title("📥 Importação e Conciliação (.OFX)")
+            st.title("📥 Importação de Extratos (.OFX)")
             uploaded_file = st.file_uploader("Upload do arquivo bancário", type=["ofx"])
 
             if uploaded_file:
                 df_import = processar_ofx(uploaded_file)
 
                 if not df_import.empty:
-                    st.subheader("Conciliação Bancária")
+                    st.subheader("Transações Detectadas")
                     
-                    # Interface de Conciliação em massa para o arquivo
-                    col_a, col_b, col_c = st.columns(3)
-                    with col_a:
-                        conta_sel = st.selectbox("Conta Bancária Origem", df_contas["Nome_Conta"].tolist() if not df_contas.empty else ["Nenhuma"])
-                    with col_b:
-                        cat_padrao = st.selectbox("Categoria Padrão", df_categorias["Nome_Categoria"].tolist() if not df_categorias.empty else ["Nenhuma"])
-                    with col_c:
-                        centro_padrao = st.selectbox("Centro de Custo Padrão", df_centros["Nome_Centro"].tolist() if not df_centros.empty else ["Nenhum"])
-
-                    # Aplicar seleções ao dataframe de importação
+                    # Vínculo com Banco: Seleção obrigatória da conta no momento da importação
+                    conta_sel = st.selectbox(
+                        "Selecione a Conta Bancária deste Extrato:", 
+                        df_contas["Nome_Conta"].tolist() if not df_contas.empty else ["Nenhuma conta cadastrada"]
+                    )
+                    
                     df_import["Conta_ID"] = conta_sel
-                    df_import["Categoria_ID"] = cat_padrao
-                    df_import["Centro_Custo_ID"] = centro_padrao
 
-                    st.dataframe(df_import[["Data", "Descricao", "Valor", "Tipo", "Documento_ID"]], use_container_width=True)
+                    # Exibição amigável na tela
+                    colunas_exibicao = ["Data", "Descricao", "Valor", "Tipo", "Documento_ID"]
+                    st.dataframe(df_import[colunas_exibicao], use_container_width=True)
 
-                    if st.button("🚀 Confirmar e Gravar na Planilha"):
-                        gravar_transacoes_na_planilha(df_import)
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        st.metric("Quantidade de transações", len(df_import))
+                    with col2:
+                        try:
+                            total = df_import["Valor"].sum()
+                            st.metric("Soma dos valores", formatar_moeda_br(total))
+                        except Exception:
+                            pass
+
+                    if st.button("🚀 Gravar na Planilha"):
+                        if conta_sel == "Nenhuma conta cadastrada":
+                            st.error("Cadastre uma conta antes de importar.")
+                        else:
+                            gravar_transacoes_na_planilha(df_import)
                 else:
-                    st.warning("Nenhuma transação extraída.")
+                    st.warning("Nenhuma transação foi extraída do arquivo OFX.")
+
+        elif menu == "Conciliação Bancária":
+            st.title("🤝 Conciliação Bancária")
+            st.info("Abaixo estão os lançamentos importados que ainda não possuem Categoria ou Centro de Custo definidos.")
+
+            if not df_lancamentos.empty:
+                # Filtra lançamentos não conciliados (vazios em Categoria ou Centro de Custo)
+                mascara_pendente = (df_lancamentos["Categoria_ID"] == "") | (df_lancamentos["Centro_Custo_ID"] == "")
+                df_pendente = df_lancamentos[mascara_pendente].copy()
+
+                if df_pendente.empty:
+                    st.success("Tudo certo! Não existem lançamentos pendentes de conciliação.")
+                else:
+                    st.write(f"Total pendente: {len(df_pendente)}")
+                    
+                    # Preparar listas para selects
+                    lista_categorias = [""] + df_categorias["Nome_Categoria"].tolist() if not df_categorias.empty else [""]
+                    lista_centros = [""] + df_centros["Nome_Centro"].tolist() if not df_centros.empty else [""]
+
+                    # Interface de edição linha a linha
+                    with st.form("form_conciliacao"):
+                        atualizacoes = []
+                        for idx, row in df_pendente.iterrows():
+                            c1, c2, c3, c4, c5 = st.columns([1, 2, 1, 1.5, 1.5])
+                            c1.text(row["Data"])
+                            c2.text(row["Descricao"])
+                            c3.text(formatar_moeda_br(row["Valor"]))
+                            
+                            nova_cat = c4.selectbox(f"Categoria", lista_categorias, key=f"cat_{idx}")
+                            novo_centro = c5.selectbox(f"Centro de Custo", lista_centros, key=f"centro_{idx}")
+                            
+                            if nova_cat != "" or novo_centro != "":
+                                atualizacoes.append({
+                                    "index_planilha": idx + 2, # +1 header +1 index 0
+                                    "categoria": nova_cat if nova_cat != "" else row["Categoria_ID"],
+                                    "centro": novo_centro if novo_centro != "" else row["Centro_Custo_ID"]
+                                })
+                            st.divider()
+
+                        if st.form_submit_button("✅ Salvar Conciliação"):
+                            ws_lanc = obter_aba(sh, NOME_ABA_LANCAMENTOS, CABECALHO_LANCAMENTOS)
+                            for acao in atualizacoes:
+                                # Coluna 4 (D) é Categoria_ID, Coluna 5 (E) é Centro_Custo_ID
+                                ws_lanc.update_cell(acao["index_planilha"], 4, acao["categoria"])
+                                ws_lanc.update_cell(acao["index_planilha"], 5, acao["centro"])
+                            st.success("Lançamentos conciliados com sucesso!")
+                            st.rerun()
+            else:
+                st.info("Nenhum lançamento encontrado para conciliação.")
 
         elif menu == "Resumo":
             st.title("📊 Resumo Financeiro")
@@ -373,7 +443,6 @@ if check_password():
                 col1, col2 = st.columns(2)
                 with col1:
                     st.subheader("Saldos Atuais")
-                    # Calcular saldos dinâmicos
                     saldos_view = []
                     for _, conta in df_contas.iterrows():
                         nome = conta["Nome_Conta"]
@@ -382,11 +451,14 @@ if check_password():
                         saldos_view.append({"Conta": nome, "Saldo": inicial + movimentacao})
                     
                     df_saldos_final = pd.DataFrame(saldos_view)
-                    st.table(df_saldos_final.style.format({"Saldo": "R$ {:,.2f}"}))
+                    # Formatação brasileira na tabela
+                    df_saldos_exibicao = df_saldos_final.copy()
+                    df_saldos_exibicao["Saldo"] = df_saldos_exibicao["Saldo"].apply(formatar_moeda_br)
+                    st.table(df_saldos_exibicao)
                 
                 with col2:
                     total_geral = sum([s["Saldo"] for s in saldos_view])
-                    st.metric("Saldo Total Consolidado", f"R$ {total_geral:,.2f}")
+                    st.metric("Saldo Total Consolidado", formatar_moeda_br(total_geral))
             else:
                 st.info("Cadastre uma conta bancária para ver os saldos.")
 
@@ -404,7 +476,8 @@ if check_password():
                     aggfunc="sum", 
                     fill_value=0
                 )
-                st.dataframe(relatorio_pivot.style.format("R$ {:,.2f}"), use_container_width=True)
+                # Formatação brasileira no DataFrame
+                st.dataframe(relatorio_pivot.applymap(formatar_moeda_br), use_container_width=True)
             else:
                 st.info("Sem dados de lançamentos para gerar o relatório.")
 
