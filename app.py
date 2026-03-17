@@ -1,80 +1,76 @@
 import streamlit as st
 import pandas as pd
+from datetime import datetime
 
-# CONFIGURAÇÃO DA PÁGINA
-st.set_page_config(page_title="Labor Business - Gestão Financeira", layout="wide")
+# CONFIGURAÇÃO
+st.set_page_config(page_title="Labor Business Pro", layout="wide")
 
-# 1. SISTEMA DE LOGIN (Simples para começar)
+# LOGIN (Mantido conforme solicitado)
 def check_password():
-    """Retorna True se o usuário inseriu a senha correta."""
     if "authenticated" not in st.session_state:
         st.session_state["authenticated"] = False
-
     if not st.session_state["authenticated"]:
-        st.title("🔐 Acesso Labor Business")
+        st.title("🔐 Sistema Labor Business")
         user = st.text_input("Usuário")
         password = st.text_input("Senha", type="password")
-        
         if st.button("Entrar"):
-            # Aqui usamos as credenciais que você solicitou
             if user == "Kowalski" and password == "Karin@1980":
                 st.session_state["authenticated"] = True
                 st.rerun()
             else:
-                st.error("Usuário ou senha incorretos")
+                st.error("Acesso negado")
         return False
     return True
 
 if check_password():
-    # --- INTERFACE DO DASHBOARD ---
-    st.sidebar.title("Labor Business")
-    st.sidebar.write(f"Bem-vindo, Kowalski")
-    
-    # Botão de Logout
-    if st.sidebar.button("Sair"):
-        st.session_state["authenticated"] = False
-        st.rerun()
+    st.sidebar.title("Navegação")
+    menu = st.sidebar.radio("Ir para:", ["Resumo", "Relatório Mensal", "Importar Extrato", "Cadastros"])
 
-    st.title("📊 Resumo de Gestão de Caixa")
-    
-    # 2. SIMULAÇÃO DE DADOS (Depois conectaremos com seu Google Sheets)
-    # Criei esses dados para você ver o visual agora mesmo
-    df_saldos = pd.DataFrame({
-        'Conta': ['Sicredi', 'Caixa Federal', 'Caixinha'],
-        'Saldo': [113901.84, 67900.49, 4174.42]
-    })
-    
-    total_geral = df_saldos['Saldo'].sum()
+    # --- ABA: IMPORTAR EXTRATO (A inteligência contra duplicidade) ---
+    if menu == "Importar Extrato":
+        st.title("📥 Importação de Dados")
+        st.info("Dica: Use arquivos .csv ou .xlsx do seu banco.")
+        
+        uploaded_file = st.file_uploader("Escolha o arquivo do banco", type=['csv', 'xlsx'])
+        
+        if uploaded_file:
+            df_import = pd.read_excel(uploaded_file) if uploaded_file.name.endswith('xlsx') else pd.read_csv(uploaded_file)
+            st.write("Dados detectados:", df_import.head())
+            
+            if st.button("Validar e Salvar"):
+                # LÓGICA ANTI-DUPLICIDADE:
+                # O sistema deve checar se (Data + Valor + Descrição) já existe no Google Sheets
+                st.warning("Implementaremos a verificação de 'Hash' para evitar duplicidade na fase de conexão com Sheets.")
 
-    # 3. LINHA SUPERIOR: SALDO TOTAL
-    col1, col2 = st.columns([1, 2])
-    
-    with col1:
-        st.subheader(f"Saldo Total: R$ {total_geral:,.2f}")
-        st.table(df_saldos)
+    # --- ABA: RELATÓRIO MENSAL (Igual à sua imagem) ---
+    elif menu == "Relatório Mensal":
+        st.title("📊 Painel de Acompanhamento (DRE/Fluxo)")
+        
+        # Filtros de Centro de Custo
+        centro_filtro = st.multiselect("Filtrar por Centro de Custo", ["Administrativo", "Produção", "Vendas"])
+        
+        # Simulando a tabela da imagem
+        dados_relatorio = {
+            "RESULTADO": ["RECEITAS OPERACIONAIS", "  Receita Serviços", "  Receita Vendas", "CUSTOS OPERACIONAIS", "MARGEM DE CONTRIBUIÇÃO"],
+            "Jan": [106551, 93967, 12584, -24682, 81869],
+            "Fev": [135882, 77900, 57982, -43475, 92407],
+            "Mar": [94237, 60537, 33700, -8251, 85986]
+        }
+        df_dre = pd.DataFrame(dados_relatorio)
+        st.table(df_dre)
 
-    with col2:
-        st.subheader("📈 Fluxo de Caixa")
-        # Criando um gráfico de linha fictício similar ao do Nibo
-        chart_data = pd.DataFrame({
-            'Data': pd.date_range(start='2026-02-01', periods=10, freq='D'),
-            'Saldo': [150000, 155000, 152000, 160000, 185000, 182000, 185976, 185976, 185976, 185976]
-        })
-        st.line_chart(chart_data.set_index('Data'))
+    # --- ABA: CADASTROS ---
+    elif menu == "Cadastros":
+        st.title("⚙️ Configurações do Sistema")
+        tab1, tab2 = st.tabs(["Plano de Contas", "Contas Bancárias"])
+        
+        with tab1:
+            st.subheader("Cadastrar Nova Categoria")
+            nome_cat = st.text_input("Nome da Conta (ex: Aluguel)")
+            tipo_cat = st.selectbox("Tipo", ["Receita", "Custo", "Despesa"])
+            if st.button("Salvar Categoria"):
+                st.success(f"{nome_cat} adicionado ao Plano de Contas!")
 
-    st.divider()
-
-    # 4. ÁREA DE RECEBIMENTOS E PAGAMENTOS
-    rec, pag = st.columns(2)
-    
-    with rec:
-        st.success("### ↑ Recebimentos")
-        st.info("Nenhum lançamento pendente") # Aqui entrará o filtro da planilha
-
-    with pag:
-        st.error("### ↓ Pagamentos")
-        st.info("Nenhum lançamento pendente")
-
-    # 5. REPLICABILIDADE (Dica para sua PF)
-    st.sidebar.divider()
-    st.sidebar.info("💡 Para usar na Pessoa Física, basta trocar a planilha de origem no código.")
+        with tab2:
+            st.subheader("Contas Bancárias")
+            st.write("Atuais: Sicredi, Caixa, Caixinha")
