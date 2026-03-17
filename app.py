@@ -9,27 +9,27 @@ import io
 # CONFIGURAÇÃO DA PÁGINA
 st.set_page_config(page_title="Labor Business Pro", layout="wide")
 
-# ID DA PLANILHA (Fornecido pelo utilizador)
+# ID DA PLANILHA
 ID_DA_PLANILHA = "1FLCbuzrg1UL1yatdIas6aDBBjhc__mebdhUYxIt0NQk"
 
 def conectar_planilha():
-    """Realiza a conexão com o Google Sheets usando a Service Account."""
+    """Conecta ao Google Sheets usando os Secrets do Streamlit Cloud."""
     scope = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
     try:
         if "gcp_service_account" in st.secrets:
-            creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=scope)
+            creds_dict = st.secrets["gcp_service_account"]
+            creds = Credentials.from_service_account_info(creds_dict, scopes=scope)
+            client = gspread.authorize(creds)
+            return client
         else:
             st.error("Erro: Bloco [gcp_service_account] não encontrado nos Secrets.")
             return None
-        client = gspread.authorize(creds)
-        return client
     except Exception as e:
         st.error(f"Erro na conexão com Google: {e}")
         return None
 
 # 2. SISTEMA DE LOGIN
 def check_password():
-    """Gere a autenticação do utilizador."""
     if "authenticated" not in st.session_state:
         st.session_state["authenticated"] = False
     
@@ -47,20 +47,24 @@ def check_password():
         return False
     return True
 
-# 3. PROCESSAMENTO DE ARQUIVO OFX (Corrigido para evitar erro de Header e Decode)
+# 3. PROCESSAMENTO DE ARQUIVO OFX (Correção Definitiva para Decode e Header)
 def processar_ofx(uploaded_file):
-    """Lê o arquivo OFX, trata erros de decode e limpa o cabeçalho malformado."""
     try:
-        # Lê o conteúdo lidando com bytes ou strings
-        raw_data = uploaded_file.read()
+        # Lê o conteúdo original
+        raw_data = uploaded_file.getvalue()
+        
+        # Tenta descodificar apenas se forem bytes
         if isinstance(raw_data, bytes):
-            content = raw_data.decode('utf-8', errors='ignore')
+            try:
+                content = raw_data.decode('utf-8')
+            except UnicodeDecodeError:
+                content = raw_data.decode('iso-8859-1')
         else:
             content = raw_data
             
         lines = content.splitlines()
         
-        # Reconstrói o arquivo garantindo a formatação correta do header
+        # Limpeza de cabeçalho para evitar o erro 'malformed header'
         clean_lines = []
         for line in lines:
             if ":" in line and "<" not in line:
@@ -71,7 +75,7 @@ def processar_ofx(uploaded_file):
         
         clean_content = "\n".join(clean_lines)
         
-        # Processa o conteúdo com a biblioteca ofxtools
+        # Parse do OFX
         parser = OFXTree()
         parser.parse(io.StringIO(clean_content))
         rec = parser.convert()
@@ -90,55 +94,48 @@ def processar_ofx(uploaded_file):
         st.error(f"Erro ao ler arquivo OFX: {e}")
         return pd.DataFrame()
 
-# --- EXECUÇÃO DO APLICATIVO ---
+# --- EXECUÇÃO DO APP ---
 if check_password():
     st.sidebar.title("Navegação")
     menu = st.sidebar.radio("Ir para:", ["Resumo", "Relatório Mensal", "Importar Extrato", "Cadastros"])
 
-    # --- ABA: RESUMO ---
     if menu == "Resumo":
         st.title("📊 Resumo de Gestão de Caixa")
         col1, col2 = st.columns([1, 2])
-        
         with col1:
             st.subheader("Saldos Atuais")
             df_saldos = pd.DataFrame({
-                'Conta': ['Sicredi - Conta Corrente', 'Caixa Económica Federal', 'Caixinha'],
+                'Conta': ['Sicredi - CC', 'Caixa Federal', 'Caixinha'],
                 'Saldo': [113901.84, 67900.49, 4174.42]
             })
             st.table(df_saldos)
             st.metric("Total Geral", f"R$ {df_saldos['Saldo'].sum():,.2f}")
-
         with col2:
-            st.subheader("📈 Tendência de Fluxo de Caixa")
+            st.subheader("📈 Tendência de Fluxo")
             chart_data = pd.DataFrame({
                 'Data': pd.date_range(start='2026-02-01', periods=10, freq='D'),
                 'Saldo': [150000, 155000, 152000, 160000, 185000, 182000, 185976, 185976, 185976, 185976]
             })
             st.line_chart(chart_data.set_index('Data'))
 
-    # --- ABA: IMPORTAR EXTRATO ---
     elif menu == "Importar Extrato":
-        st.title("📥 Importação de Extratos Bancários")
-        st.info("Utilize arquivos .ofx para garantir a unicidade dos lançamentos (FITID).")
-        
-        uploaded_file = st.file_uploader("Selecione o arquivo .ofx", type=['ofx'])
+        st.title("📥 Importação de Extratos (.OFX)")
+        uploaded_file = st.file_uploader("Upload do arquivo bancário", type=['ofx'])
         
         if uploaded_file:
             df_import = processar_ofx(uploaded_file)
-            
             if not df_import.empty:
-                st.subheader("Transações Identificadas")
+                st.subheader("Transações Detectadas")
                 st.dataframe(df_import, use_container_width=True)
                 
-                if st.button("🚀 Gravar Dados na Planilha"):
+                if st.button("🚀 Gravar na Planilha"):
                     gc = conectar_planilha()
                     if gc:
                         try:
-                            sh = gc.open_by_key(ID_DA_PLANILHA) 
+                            sh = gc.open_by_key(ID_DA_PLANILHA)
                             ws = sh.get_worksheet(0)
-                            
-                            dados_atuais = pd.DataFrame(ws.get_all_records())
+                            registros = ws.get_all_records()
+                            dados_atuais = pd.DataFrame(registros)
                             
                             if not dados_atuais.empty and 'FITID' in dados_atuais.columns:
                                 novos_dados = df_import[~df_import['FITID'].astype(str).isin(dados_atuais['FITID'].astype(str))]
@@ -147,43 +144,22 @@ if check_password():
                             
                             if not novos_dados.empty:
                                 ws.append_rows(novos_dados.values.tolist())
-                                st.success(f"Sucesso! {len(novos_dados)} novas transações foram gravadas.")
+                                st.success(f"Sucesso! {len(novos_dados)} transações adicionadas.")
                             else:
-                                st.warning("Aviso: Todas as transações deste arquivo já existem na planilha.")
+                                st.warning("Transações já constam na planilha.")
                         except Exception as e:
-                            st.error(f"Erro ao gravar na planilha: {e}")
+                            st.error(f"Erro ao acessar planilha: {e}")
 
-    # --- ABA: RELATÓRIO MENSAL (Conforme imagem do Nibo) ---
     elif menu == "Relatório Mensal":
         st.title("📊 Painel de Acompanhamento (DRE)")
-        centro_filtro = st.multiselect("Filtrar por Centro de Custo", ["Administrativo", "Produção", "Vendas"])
-        
         dados_relatorio = {
-            "RESULTADO": [
-                "RECEITAS OPERACIONAIS (A)", 
-                "  ↑ Receita Plano Funerário", 
-                "  ↑ Receita Comissão Médicos", 
-                "CUSTOS OPERACIONAIS (B)", 
-                "MARGEM DE CONTRIBUIÇÃO (A+B)"
-            ],
-            "Jan": [106551, 93967, 3654, -24682, 81869],
-            "Fev": [135882, 77900, 3691, -43475, 92407],
-            "Mar": [94237, 60537, 598, -8251, 85986]
+            "RESULTADO": ["RECEITAS OPERACIONAIS (A)", "  ↑ Receita Serviços", "CUSTOS OPERACIONAIS (B)", "MARGEM DE CONTRIBUIÇÃO (A+B)"],
+            "Jan": [106551, 93967, -24682, 81869],
+            "Fev": [135882, 77900, -43475, 92407],
+            "Mar": [94237, 60537, -8251, 85986]
         }
-        df_dre = pd.DataFrame(dados_relatorio)
-        st.dataframe(df_dre, use_container_width=True, hide_index=True)
+        st.dataframe(pd.DataFrame(dados_relatorio), use_container_width=True, hide_index=True)
 
-    # --- ABA: CADASTROS ---
     elif menu == "Cadastros":
-        st.title("⚙️ Cadastros e Configurações")
-        tab1, tab2, tab3 = st.tabs(["Plano de Contas", "Centro de Custos", "Contas Bancárias"])
-        with tab1:
-            nome_cat = st.text_input("Nome da Conta")
-            if st.button("Confirmar Categoria"):
-                st.success(f"Categoria {nome_cat} registada.")
-        with tab2:
-            novo_cc = st.text_input("Nome do Centro de Custo")
-            if st.button("Confirmar Centro"):
-                st.success(f"Centro {novo_cc} registado.")
-        with tab3:
-            st.write("- Sicredi | - Caixa Federal | - Caixinha")
+        st.title("⚙️ Configurações")
+        st.write("Bancos cadastrados: Sicredi, Caixa Federal, Caixinha.")
