@@ -15,8 +15,11 @@ st.set_page_config(page_title="Labor Business Pro", layout="wide")
 # =========================================================
 ID_DA_PLANILHA = "1FLCbuzrg1UL1yatdIas6aDBBjhc__mebdhUYxIt0NQk"
 NOME_ABA_LANCAMENTOS = "Lancamentos"
+NOME_ABA_CONTAS = "Contas"
+NOME_ABA_CATEGORIAS = "Categorias"
+NOME_ABA_CENTROS = "Centros_Custo"
 
-# Cabeçalho real da sua aba Lancamentos
+# Cabeçalhos reais das abas
 CABECALHO_LANCAMENTOS = [
     "Data",
     "Descricao",
@@ -27,6 +30,9 @@ CABECALHO_LANCAMENTOS = [
     "Documento_ID"
 ]
 
+CABECALHO_CONTAS = ["ID", "Nome_Conta", "Banco", "Saldo_Inicial"]
+CABECALHO_CATEGORIAS = ["ID", "Nome_Categoria", "Tipo"]
+CABECALHO_CENTROS = ["ID", "Nome_Centro"]
 
 # =========================================================
 # GOOGLE SHEETS
@@ -51,7 +57,6 @@ def conectar_planilha():
     except Exception as e:
         st.error(f"Erro na conexão com Google Sheets: {type(e).__name__}: {e}")
         return None
-
 
 # =========================================================
 # LOGIN
@@ -252,57 +257,22 @@ def processar_ofx(uploaded_file):
 
 
 # =========================================================
-# PLANILHA
+# PLANILHA - OPERAÇÕES
 # =========================================================
-def obter_aba_lancamentos(sh):
-    """
-    Obtém a aba 'Lancamentos'. Se não existir, cria.
-    """
+def obter_aba(sh, nome_aba, cabecalho):
     try:
-        return sh.worksheet(NOME_ABA_LANCAMENTOS)
+        return sh.worksheet(nome_aba)
     except Exception:
-        return sh.add_worksheet(title=NOME_ABA_LANCAMENTOS, rows=2000, cols=20)
+        ws = sh.add_worksheet(title=nome_aba, rows=2000, cols=20)
+        ws.append_row(cabecalho)
+        return ws
 
-
-def garantir_cabecalho_planilha(ws):
-    """
-    Garante o cabeçalho correto na aba Lancamentos.
-    """
-    try:
-        valores = ws.get_all_values()
-
-        if not valores:
-            ws.append_row(CABECALHO_LANCAMENTOS)
-            return CABECALHO_LANCAMENTOS
-
-        primeira_linha = valores[0]
-
-        if primeira_linha[:len(CABECALHO_LANCAMENTOS)] != CABECALHO_LANCAMENTOS:
-            st.warning(
-                "O cabeçalho da aba 'Lancamentos' está diferente do esperado. "
-                f"Esperado: {CABECALHO_LANCAMENTOS} | Encontrado: {primeira_linha}"
-            )
-
-        return primeira_linha
-
-    except Exception as e:
-        st.error(f"Erro ao validar cabeçalho da planilha: {type(e).__name__}: {e}")
-        return None
-
-
-def carregar_dados_planilha(ws):
-    """
-    Carrega os registros da aba Lancamentos.
-    """
-    try:
-        registros = ws.get_all_records()
-        if not registros:
-            return pd.DataFrame(columns=CABECALHO_LANCAMENTOS)
-        return pd.DataFrame(registros)
-    except Exception as e:
-        st.error(f"Erro ao carregar dados da planilha: {type(e).__name__}: {e}")
-        return pd.DataFrame(columns=CABECALHO_LANCAMENTOS)
-
+def carregar_dados_aba(sh, nome_aba, cabecalho):
+    ws = obter_aba(sh, nome_aba, cabecalho)
+    registros = ws.get_all_records()
+    if not registros:
+        return pd.DataFrame(columns=cabecalho)
+    return pd.DataFrame(registros)
 
 def gravar_transacoes_na_planilha(df_import):
     gc = conectar_planilha()
@@ -311,124 +281,169 @@ def gravar_transacoes_na_planilha(df_import):
 
     try:
         sh = gc.open_by_key(ID_DA_PLANILHA)
-        ws = obter_aba_lancamentos(sh)
+        ws = obter_aba(sh, NOME_ABA_LANCAMENTOS, CABECALHO_LANCAMENTOS)
 
-        garantir_cabecalho_planilha(ws)
-        df_planilha = carregar_dados_planilha(ws)
+        df_planilha = carregar_dados_aba(sh, NOME_ABA_LANCAMENTOS, CABECALHO_LANCAMENTOS)
 
         if df_import.empty:
             st.warning("Não há dados para gravar.")
-            return
-
-        colunas_necessarias = [
-            "Data",
-            "Descricao",
-            "Valor",
-            "Categoria_ID",
-            "Centro_Custo_ID",
-            "Conta_ID",
-            "Documento_ID",
-            "FITID"
-        ]
-
-        colunas_faltantes = [c for c in colunas_necessarias if c not in df_import.columns]
-        if colunas_faltantes:
-            st.error(f"Colunas faltantes no arquivo importado: {colunas_faltantes}")
             return
 
         df_import = df_import.copy()
         df_import["FITID"] = df_import["FITID"].astype(str).str.strip()
         df_import["Documento_ID"] = df_import["Documento_ID"].astype(str).str.strip()
 
-        # Anti-duplicidade:
-        # 1) se existir Documento_ID na planilha, compara por ele
-        # 2) se não existir, usa combinação Data + Valor + Descricao
         if not df_planilha.empty:
             if "Documento_ID" in df_planilha.columns:
                 df_planilha["Documento_ID"] = df_planilha["Documento_ID"].astype(str).str.strip()
                 novos = df_import[~df_import["Documento_ID"].isin(df_planilha["Documento_ID"])]
             else:
-                chave_import = (
-                    df_import["Data"].astype(str).str.strip() + "|" +
-                    df_import["Valor"].astype(str).str.strip() + "|" +
-                    df_import["Descricao"].astype(str).str.strip()
-                )
-
-                chave_planilha = (
-                    df_planilha.get("Data", pd.Series(dtype=str)).astype(str).str.strip() + "|" +
-                    df_planilha.get("Valor", pd.Series(dtype=str)).astype(str).str.strip() + "|" +
-                    df_planilha.get("Descricao", pd.Series(dtype=str)).astype(str).str.strip()
-                )
-
+                chave_import = df_import["Data"].astype(str) + "|" + df_import["Valor"].astype(str) + "|" + df_import["Descricao"].astype(str)
+                chave_planilha = df_planilha["Data"].astype(str) + "|" + df_planilha["Valor"].astype(str) + "|" + df_planilha["Descricao"].astype(str)
                 novos = df_import[~chave_import.isin(chave_planilha)]
         else:
             novos = df_import.copy()
 
         if novos.empty:
-            st.warning("Nenhuma transação nova. Os registros já existem na aba 'Lancamentos'.")
+            st.warning("Nenhuma transação nova detectada.")
             return
 
-        # Mantém apenas as colunas do layout da aba Lancamentos
-        novos = novos[CABECALHO_LANCAMENTOS]
-        linhas = novos.values.tolist()
-
-        ws.append_rows(linhas, value_input_option="USER_ENTERED")
-        st.success(f"Sucesso. {len(novos)} lançamentos gravados na aba '{NOME_ABA_LANCAMENTOS}'.")
+        novos_para_gravar = novos[CABECALHO_LANCAMENTOS]
+        ws.append_rows(novos_para_gravar.values.tolist(), value_input_option="USER_ENTERED")
+        st.success(f"Sucesso. {len(novos)} lançamentos gravados.")
 
     except Exception as e:
-        st.error(f"Erro ao acessar/gravar na planilha: {type(e).__name__}: {e}")
+        st.error(f"Erro ao gravar na planilha: {e}")
 
 
 # =========================================================
 # INTERFACE
 # =========================================================
 if check_password():
-    st.sidebar.title("Navegação")
-    menu = st.sidebar.radio(
-        "Ir para:",
-        ["Resumo", "Relatório Mensal", "Importar Extrato", "Cadastros"]
-    )
+    gc = conectar_planilha()
+    if gc:
+        sh = gc.open_by_key(ID_DA_PLANILHA)
+        
+        # Carregar Cadastros de Apoio
+        df_contas = carregar_dados_aba(sh, NOME_ABA_CONTAS, CABECALHO_CONTAS)
+        df_categorias = carregar_dados_aba(sh, NOME_ABA_CATEGORIAS, CABECALHO_CATEGORIAS)
+        df_centros = carregar_dados_aba(sh, NOME_ABA_CENTROS, CABECALHO_CENTROS)
+        df_lancamentos = carregar_dados_aba(sh, NOME_ABA_LANCAMENTOS, CABECALHO_LANCAMENTOS)
 
-    if menu == "Importar Extrato":
-        st.title("📥 Importação de Extratos (.OFX)")
-        uploaded_file = st.file_uploader("Upload do arquivo bancário", type=["ofx"])
+        st.sidebar.title("Navegação")
+        menu = st.sidebar.radio(
+            "Ir para:",
+            ["Resumo", "Relatório Mensal", "Importar Extrato", "Cadastros"]
+        )
 
-        if uploaded_file:
-            st.info(f"Arquivo carregado: {uploaded_file.name}")
+        if menu == "Importar Extrato":
+            st.title("📥 Importação e Conciliação (.OFX)")
+            uploaded_file = st.file_uploader("Upload do arquivo bancário", type=["ofx"])
 
-            df_import = processar_ofx(uploaded_file)
+            if uploaded_file:
+                df_import = processar_ofx(uploaded_file)
 
-            if not df_import.empty:
-                st.subheader("Transações Detectadas")
+                if not df_import.empty:
+                    st.subheader("Conciliação Bancária")
+                    
+                    # Interface de Conciliação em massa para o arquivo
+                    col_a, col_b, col_c = st.columns(3)
+                    with col_a:
+                        conta_sel = st.selectbox("Conta Bancária Origem", df_contas["Nome_Conta"].tolist() if not df_contas.empty else ["Nenhuma"])
+                    with col_b:
+                        cat_padrao = st.selectbox("Categoria Padrão", df_categorias["Nome_Categoria"].tolist() if not df_categorias.empty else ["Nenhuma"])
+                    with col_c:
+                        centro_padrao = st.selectbox("Centro de Custo Padrão", df_centros["Nome_Centro"].tolist() if not df_centros.empty else ["Nenhum"])
 
-                # Exibição amigável na tela
-                colunas_exibicao = ["Data", "Descricao", "Valor", "Tipo", "Documento_ID"]
-                st.dataframe(df_import[colunas_exibicao], use_container_width=True)
+                    # Aplicar seleções ao dataframe de importação
+                    df_import["Conta_ID"] = conta_sel
+                    df_import["Categoria_ID"] = cat_padrao
+                    df_import["Centro_Custo_ID"] = centro_padrao
 
+                    st.dataframe(df_import[["Data", "Descricao", "Valor", "Tipo", "Documento_ID"]], use_container_width=True)
+
+                    if st.button("🚀 Confirmar e Gravar na Planilha"):
+                        gravar_transacoes_na_planilha(df_import)
+                else:
+                    st.warning("Nenhuma transação extraída.")
+
+        elif menu == "Resumo":
+            st.title("📊 Resumo Financeiro")
+            if not df_contas.empty:
                 col1, col2 = st.columns(2)
                 with col1:
-                    st.metric("Quantidade de transações", len(df_import))
+                    st.subheader("Saldos Atuais")
+                    # Calcular saldos dinâmicos
+                    saldos_view = []
+                    for _, conta in df_contas.iterrows():
+                        nome = conta["Nome_Conta"]
+                        inicial = para_float(conta["Saldo_Inicial"])
+                        movimentacao = df_lancamentos[df_lancamentos["Conta_ID"] == nome]["Valor"].astype(float).sum()
+                        saldos_view.append({"Conta": nome, "Saldo": inicial + movimentacao})
+                    
+                    df_saldos_final = pd.DataFrame(saldos_view)
+                    st.table(df_saldos_final.style.format({"Saldo": "R$ {:,.2f}"}))
+                
                 with col2:
-                    try:
-                        total = df_import["Valor"].sum()
-                        total_fmt = f"R$ {total:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
-                        st.metric("Soma dos valores", total_fmt)
-                    except Exception:
-                        pass
-
-                if st.button("🚀 Gravar na Planilha"):
-                    gravar_transacoes_na_planilha(df_import)
+                    total_geral = sum([s["Saldo"] for s in saldos_view])
+                    st.metric("Saldo Total Consolidado", f"R$ {total_geral:,.2f}")
             else:
-                st.warning("Nenhuma transação foi extraída do arquivo OFX.")
+                st.info("Cadastre uma conta bancária para ver os saldos.")
 
-    elif menu == "Resumo":
-        st.title("📊 Resumo Financeiro")
-        st.write("Saldos e fluxo de caixa.")
+        elif menu == "Relatório Mensal":
+            st.title("📊 Relatórios Realizado (DRE)")
+            if not df_lancamentos.empty:
+                # Criar coluna de mês/ano para o Pivot
+                df_lancamentos["Mes_Ano"] = pd.to_datetime(df_lancamentos["Data"], dayfirst=True).dt.strftime('%Y-%m')
+                df_lancamentos["Valor"] = df_lancamentos["Valor"].astype(float)
+                
+                relatorio_pivot = df_lancamentos.pivot_table(
+                    index="Categoria_ID", 
+                    columns="Mes_Ano", 
+                    values="Valor", 
+                    aggfunc="sum", 
+                    fill_value=0
+                )
+                st.dataframe(relatorio_pivot.style.format("R$ {:,.2f}"), use_container_width=True)
+            else:
+                st.info("Sem dados de lançamentos para gerar o relatório.")
 
-    elif menu == "Relatório Mensal":
-        st.title("📊 Relatórios DRE")
-        st.write("Acompanhamento mensal de resultados.")
+        elif menu == "Cadastros":
+            st.title("⚙️ Gestão de Cadastros")
+            tab_contas, tab_cats, tab_centros = st.tabs(["Contas Bancárias", "Plano de Contas", "Centros de Custo"])
+            
+            with tab_contas:
+                st.subheader("Nova Conta")
+                with st.form("form_contas"):
+                    n_conta = st.text_input("Nome da Conta (ex: Sicredi)")
+                    b_conta = st.text_input("Banco")
+                    s_inicial = st.number_input("Saldo Inicial", format="%.2f")
+                    if st.form_submit_button("Salvar Conta"):
+                        ws_contas = obter_aba(sh, NOME_ABA_CONTAS, CABECALHO_CONTAS)
+                        ws_contas.append_row([len(df_contas)+1, n_conta, b_conta, s_inicial])
+                        st.success("Conta cadastrada!")
+                        st.rerun()
+                st.dataframe(df_contas)
 
-    elif menu == "Cadastros":
-        st.title("⚙️ Configurações")
-        st.write("Plano de contas e bancos.")
+            with tab_cats:
+                st.subheader("Nova Categoria")
+                with st.form("form_cats"):
+                    n_cat = st.text_input("Nome da Categoria")
+                    t_cat = st.selectbox("Tipo", ["Receita", "Despesa"])
+                    if st.form_submit_button("Salvar Categoria"):
+                        ws_cats = obter_aba(sh, NOME_ABA_CATEGORIAS, CABECALHO_CATEGORIAS)
+                        ws_cats.append_row([len(df_categorias)+1, n_cat, t_cat])
+                        st.success("Categoria cadastrada!")
+                        st.rerun()
+                st.dataframe(df_categorias)
+
+            with tab_centros:
+                st.subheader("Novo Centro de Custo")
+                with st.form("form_centros"):
+                    n_centro = st.text_input("Nome do Centro de Custo")
+                    if st.form_submit_button("Salvar Centro"):
+                        ws_centros = obter_aba(sh, NOME_ABA_CENTROS, CABECALHO_CENTROS)
+                        ws_centros.append_row([len(df_centros)+1, n_centro])
+                        st.success("Centro cadastrado!")
+                        st.rerun()
+                st.dataframe(df_centros)
