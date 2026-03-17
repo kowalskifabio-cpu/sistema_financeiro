@@ -494,11 +494,6 @@ if check_password():
                     linha_dre = {"Código": codigo_pai, "Descrição": ("  " * (nivel - 1)) + nome_cat}
                     
                     for mes in colunas_meses:
-                        # LÓGICA DE SOMATÓRIO: 
-                        # Nível 1 soma tudo que começa com o prefixo do Nível 1
-                        # Nível 2 soma tudo que começa com o prefixo do Nível 2...
-                        # Ex: '3' soma '3.01', '3.01.01', '3.01.01.001'
-                        
                         # Filtra no pivot todos os códigos que iniciam com o código da categoria atual
                         mask = df_pivot_ana.index.astype(str).str.startswith(codigo_pai)
                         valor_total = df_pivot_ana[mask][mes].sum()
@@ -541,7 +536,13 @@ if check_password():
                         obter_aba(sh, NOME_ABA_CATEGORIAS, CABECALHO_CATEGORIAS).append_row([f_c, f_n, f_t])
                         st.success("Categoria salva!")
                         st.rerun()
-                st.dataframe(df_categorias.sort_values(by="Codigo"))
+                
+                # VERIFICAÇÃO DE SEGURANÇA PARA O ERRO KEYERROR: 'Codigo'
+                if not df_categorias.empty and "Codigo" in df_categorias.columns:
+                    st.dataframe(df_categorias.sort_values(by="Codigo"))
+                else:
+                    st.error("A coluna 'Codigo' não foi encontrada na planilha. Verifique o cabeçalho na aba 'Categorias'.")
+                    st.dataframe(df_categorias)
 
             with tab3:
                 st.subheader("Novos Centros de Custo")
