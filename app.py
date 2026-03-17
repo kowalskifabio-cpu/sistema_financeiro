@@ -1,9 +1,9 @@
 import streamlit as st
 import pandas as pd
-from ofxtools.Parser import OFXTree
 import gspread
 from google.oauth2.service_account import Credentials
-import io
+import re
+import html
 
 # =========================================================
 # CONFIGURAÇÃO DA PÁGINA
@@ -17,7 +17,7 @@ ID_DA_PLANILHA = "1FLCbuzrg1UL1yatdIas6aDBBjhc__mebdhUYxIt0NQk"
 
 
 # =========================================================
-# FUNÇÕES AUXILIARES
+# GOOGLE SHEETS
 # =========================================================
 def conectar_planilha():
     """Conecta ao Google Sheets usando st.secrets."""
@@ -41,10 +41,10 @@ def conectar_planilha():
         return None
 
 
+# =========================================================
+# LOGIN
+# =========================================================
 def obter_credenciais_login():
-    """
-    Busca usuário e senha do login em st.secrets.
-    """
     try:
         username = st.secrets["auth"]["username"]
         password = st.secrets["auth"]["password"]
@@ -58,7 +58,6 @@ def obter_credenciais_login():
 
 
 def check_password():
-    """Tela simples de login."""
     if "authenticated" not in st.session_state:
         st.session_state["authenticated"] = False
 
@@ -84,25 +83,23 @@ def check_password():
     return False
 
 
+# =========================================================
+# OFX - PARSER TOLERANTE
+# =========================================================
 def decodificar_ofx_bytes(conteudo_bytes):
-    """
-    Tenta decodificar o OFX com múltiplos encodings.
-    """
-    encodings_teste = ["cp1252", "latin-1", "utf-8"]
-
-    for enc in encodings_teste:
+    """Tenta decodificar com múltiplos encodings comuns de OFX bancário."""
+    for enc in ["cp1252", "latin-1", "utf-8"]:
         try:
             return conteudo_bytes.decode(enc)
         except Exception:
             continue
-
-    raise ValueError("Não foi possível decodificar o arquivo OFX com cp1252, latin-1 ou utf-8.")
+    raise ValueError("Não foi possível decodificar o arquivo OFX.")
 
 
 def limpar_header_ofx(texto_ofx):
     """
-    Corrige headers OFX inconsistentes, como:
-    ENCODING: UTF - 8  -> ENCODING:UTF-8
+    Corrige headers problemáticos como:
+    ENCODING: UTF - 8 -> ENCODING:UTF-8
     """
     linhas = texto_ofx.splitlines()
     linhas_limpas = []
@@ -110,13 +107,11 @@ def limpar_header_ofx(texto_ofx):
     for linha in linhas:
         linha_strip = linha.strip()
 
+        # corrige apenas linhas do header OFX clássico
         if ":" in linha_strip and "<" not in linha_strip:
             partes = linha_strip.split(":", 1)
             chave = partes[0].strip()
-            valor = partes[1].strip()
-
-            valor = valor.replace(" ", "")
-
+            valor = partes[1].strip().replace(" ", "")
             linhas_limpas.append(f"{chave}:{valor}")
         else:
             linhas_limpas.append(linha)
@@ -124,14 +119,63 @@ def limpar_header_ofx(texto_ofx):
     return "\n".join(linhas_limpas)
 
 
+def extrair_tag(bloco, tag):
+    """
+    Extrai conteúdo de uma tag OFX, tolerando ausência de fechamento em alguns casos.
+    """
+    padrao = rf"<{tag}>(.*?)(?:</{tag}>|\n|$)"
+    m = re.search(padrao, bloco, re.IGNORECASE | re.DOTALL)
+    if not m:
+        return ""
+    valor = m.group(1).strip()
+    return html.unescape(valor)
+
+
+def formatar_data_ofx(dt_raw):
+    """
+    Converte datas OFX como 20260317071057[-3:BRT] para 17/03/2026.
+    """
+    if not dt_raw:
+        return ""
+
+    numeros = re.match(r"(\d{8,14})", str(dt_raw))
+    if not numeros:
+        return str(dt_raw)
+
+    s = numeros.group(1)
+    yyyy = s[0:4]
+    mm = s[4:6]
+    dd = s[6:8]
+    return f"{dd}/{mm}/{yyyy}"
+
+
+def para_float(valor):
+    if valor is None:
+        return 0.0
+
+    valor = str(valor).strip()
+    if valor == "":
+        return 0.0
+
+    valor = valor.replace(" ", "")
+
+    try:
+        return float(valor)
+    except Exception:
+        try:
+            valor = valor.replace(".", "").replace(",", ".")
+            return float(valor)
+        except Exception:
+            return 0.0
+
+
 def processar_ofx(uploaded_file):
     """
-    Processa OFX de forma robusta:
+    Parser tolerante para OFX bancário:
     - lê em bytes
     - decodifica com fallback
-    - limpa header problemático
-    - reconverte para bytes
-    - parseia com OFXTree em modo binário
+    - limpa header inconsistente
+    - extrai blocos STMTTRN sem depender da ordem rígida das tags
     """
     try:
         uploaded_file.seek(0)
@@ -142,65 +186,49 @@ def processar_ofx(uploaded_file):
             return pd.DataFrame()
 
         texto_ofx = decodificar_ofx_bytes(conteudo)
-        texto_ofx_limpo = limpar_header_ofx(texto_ofx)
+        texto_ofx = limpar_header_ofx(texto_ofx)
 
-        # ofxtools espera binário
-        ofx_bytes = texto_ofx_limpo.encode("cp1252", errors="ignore")
+        blocos = re.findall(r"<STMTTRN>(.*?)</STMTTRN>", texto_ofx, re.IGNORECASE | re.DOTALL)
 
-        parser = OFXTree()
-        parser.parse(io.BytesIO(ofx_bytes))
-        rec = parser.convert()
-
-        if not hasattr(rec, "statements") or not rec.statements:
-            st.error("Nenhum statement encontrado no arquivo OFX.")
-            return pd.DataFrame()
-
-        stmt = rec.statements[0]
-
-        if not hasattr(stmt, "banktranlist") or not stmt.banktranlist:
-            st.warning("O OFX foi lido, mas não há transações disponíveis.")
+        if not blocos:
+            st.warning("Nenhum bloco <STMTTRN> foi encontrado no OFX.")
             return pd.DataFrame()
 
         transacoes = []
-        for tx in stmt.banktranlist:
-            data_tx = ""
-            valor_tx = 0.0
-            fitid_tx = ""
-            desc_tx = ""
 
-            if getattr(tx, "dtposted", None):
-                try:
-                    data_tx = tx.dtposted.date().strftime("%d/%m/%Y")
-                except Exception:
-                    data_tx = str(tx.dtposted)
+        for bloco in blocos:
+            fitid = extrair_tag(bloco, "FITID")
+            trnamt = extrair_tag(bloco, "TRNAMT")
+            dtposted = extrair_tag(bloco, "DTPOSTED")
+            memo = extrair_tag(bloco, "MEMO")
+            name = extrair_tag(bloco, "NAME")
+            trntype = extrair_tag(bloco, "TRNTYPE")
+            refnum = extrair_tag(bloco, "REFNUM")
+            checknum = extrair_tag(bloco, "CHECKNUM")
 
-            if getattr(tx, "trnamt", None) is not None:
-                try:
-                    valor_tx = float(tx.trnamt)
-                except Exception:
-                    valor_tx = 0.0
-
-            if getattr(tx, "fitid", None):
-                fitid_tx = str(tx.fitid)
-
-            if getattr(tx, "memo", None):
-                desc_tx = str(tx.memo)
-            elif getattr(tx, "name", None):
-                desc_tx = str(tx.name)
-            else:
-                desc_tx = ""
+            descricao = memo or name or trntype or ""
+            documento = refnum or checknum or ""
 
             transacoes.append({
-                "Data": data_tx,
-                "Valor": valor_tx,
-                "FITID": fitid_tx,
-                "Descrição": desc_tx
+                "Data": formatar_data_ofx(dtposted),
+                "Valor": para_float(trnamt),
+                "FITID": str(fitid).strip(),
+                "Descrição": str(descricao).strip(),
+                "Tipo": str(trntype).strip(),
+                "Documento": str(documento).strip()
             })
 
         df = pd.DataFrame(transacoes)
 
         if not df.empty:
-            df = df.dropna(how="all")
+            df = df[
+                ~(
+                    df["Data"].eq("") &
+                    df["FITID"].eq("") &
+                    df["Descrição"].eq("") &
+                    df["Valor"].eq(0.0)
+                )
+            ].copy()
 
         return df
 
@@ -209,8 +237,11 @@ def processar_ofx(uploaded_file):
         return pd.DataFrame()
 
 
+# =========================================================
+# PLANILHA
+# =========================================================
 def garantir_cabecalho_planilha(ws):
-    cabecalho_esperado = ["Data", "Valor", "FITID", "Descrição"]
+    cabecalho_esperado = ["Data", "Valor", "FITID", "Descrição", "Tipo", "Documento"]
 
     try:
         valores = ws.get_all_values()
@@ -222,7 +253,7 @@ def garantir_cabecalho_planilha(ws):
         primeira_linha = valores[0]
         if primeira_linha != cabecalho_esperado:
             st.warning(
-                "A aba da planilha não está com o cabeçalho esperado. "
+                "A primeira linha da planilha está diferente do esperado. "
                 f"Esperado: {cabecalho_esperado} | Encontrado: {primeira_linha}"
             )
         return primeira_linha
@@ -236,7 +267,7 @@ def carregar_dados_planilha(ws):
     try:
         registros = ws.get_all_records()
         if not registros:
-            return pd.DataFrame(columns=["Data", "Valor", "FITID", "Descrição"])
+            return pd.DataFrame(columns=["Data", "Valor", "FITID", "Descrição", "Tipo", "Documento"])
         return pd.DataFrame(registros)
     except Exception as e:
         st.error(f"Erro ao carregar dados da planilha: {type(e).__name__}: {e}")
@@ -259,12 +290,14 @@ def gravar_transacoes_na_planilha(df_import):
             st.warning("Não há dados para gravar.")
             return
 
-        colunas_necessarias = ["Data", "Valor", "FITID", "Descrição"]
+        colunas_necessarias = ["Data", "Valor", "FITID", "Descrição", "Tipo", "Documento"]
         colunas_faltantes = [c for c in colunas_necessarias if c not in df_import.columns]
+
         if colunas_faltantes:
-            st.error(f"Colunas faltantes no DataFrame importado: {colunas_faltantes}")
+            st.error(f"Colunas faltantes no arquivo importado: {colunas_faltantes}")
             return
 
+        df_import = df_import.copy()
         df_import["FITID"] = df_import["FITID"].astype(str).str.strip()
 
         if not df_planilha.empty and "FITID" in df_planilha.columns:
@@ -277,10 +310,10 @@ def gravar_transacoes_na_planilha(df_import):
             st.warning("Nenhuma transação nova. Todos os FITIDs já existem na planilha.")
             return
 
-        novos = novos[["Data", "Valor", "FITID", "Descrição"]]
+        novos = novos[["Data", "Valor", "FITID", "Descrição", "Tipo", "Documento"]]
         linhas = novos.values.tolist()
-        ws.append_rows(linhas, value_input_option="USER_ENTERED")
 
+        ws.append_rows(linhas, value_input_option="USER_ENTERED")
         st.success(f"Sucesso. {len(novos)} lançamentos gravados na planilha.")
 
     except Exception as e:
@@ -323,7 +356,6 @@ if check_password():
 
                 if st.button("🚀 Gravar na Planilha"):
                     gravar_transacoes_na_planilha(df_import)
-
             else:
                 st.warning("Nenhuma transação foi extraída do arquivo OFX.")
 
