@@ -446,7 +446,9 @@ if check_password():
             else:
                 st.write(f"Lançamentos para tratar: {len(df_pendente)}")
                 
-                l_cats = [""] + df_categorias_analiticas["Nome_Categoria"].tolist() if not df_categorias_analiticas.empty else [""]
+                # Listas de seleção
+                l_cats = ["", "TRANSFERÊNCIA"] + df_categorias_analiticas["Nome_Categoria"].tolist() if not df_categorias_analiticas.empty else ["", "TRANSFERÊNCIA"]
+                l_contas = df_contas["Nome_Conta"].tolist() if not df_contas.empty else []
                 
                 if not df_centros.empty:
                     col_nome_cen = "Centros_Custos" if "Centros_Custos" in df_centros.columns else "Nome_Centro"
@@ -459,25 +461,47 @@ if check_password():
                     linha_index = idx + 2
                     
                     with st.container():
-                        c = st.columns([1, 2.5, 1, 1.5, 1.5, 0.8])
+                        c = st.columns([1, 2, 1, 1.5, 1.5, 0.8])
                         c[0].text(row["Data"])
                         c[1].text(row["Descricao"])
                         c[2].text(formatar_moeda_br(row["Valor"]))
                         
                         sel_cat = c[3].selectbox(f"Categoria", l_cats, key=f"cat_p_{idx}")
-                        sel_cen = c[4].selectbox(f"Centro Custo", l_cens, key=f"cen_p_{idx}")
+                        
+                        # Lógica de Transferência
+                        if sel_cat == "TRANSFERÊNCIA":
+                            sel_cen = c[4].selectbox(f"Conta Destino", l_contas, key=f"cen_p_{idx}")
+                        else:
+                            sel_cen = c[4].selectbox(f"Centro Custo", l_cens, key=f"cen_p_{idx}")
                         
                         if c[5].button("✅ Confirmar", key=f"btn_p_{idx}"):
                             if sel_cat == "" or sel_cen == "":
-                                st.error("Selecione Categoria e Centro de Custo.")
+                                st.error("Selecione os campos necessários.")
+                            elif sel_cat == "TRANSFERÊNCIA" and sel_cen == row["Conta_ID"]:
+                                st.error("Conta destino deve ser diferente da origem.")
                             else:
                                 gc = conectar_planilha()
                                 ws_l = gc.open_by_key(ID_DA_PLANILHA).worksheet(NOME_ABA_LANCAMENTOS)
                                 ws_l.update_cell(linha_index, 4, sel_cat)
                                 ws_l.update_cell(linha_index, 5, sel_cen)
                                 ws_l.update_cell(linha_index, 8, "CONCILIADO")
-                                st.cache_data.clear() # Limpa cache para refletir a alteração
-                                st.success(f"Linha {linha_index} conciliada!")
+                                
+                                # Se for transferência, gera a contrapartida automática para manter o saldo
+                                if sel_cat == "TRANSFERÊNCIA":
+                                    contrapartida = [
+                                        row["Data"],
+                                        f"CONTRA-PARTIDA: {row['Descricao']}",
+                                        -row["Valor"], # Inverte o sinal para a outra conta
+                                        "TRANSFERÊNCIA",
+                                        row["Conta_ID"], # O centro de custo vira a conta de origem
+                                        sel_cen, # A conta destino
+                                        f"TRF-{row['Documento_ID']}",
+                                        "CONCILIADO"
+                                    ]
+                                    ws_l.append_row(contrapartida, value_input_option="USER_ENTERED")
+                                
+                                st.cache_data.clear()
+                                st.success("Conciliado!")
                                 st.rerun()
                         st.divider()
 
@@ -499,7 +523,9 @@ if check_password():
             if df_conciliado.empty:
                 st.info("Nenhum lançamento conciliado encontrado.")
             else:
-                l_cats = [""] + df_categorias_analiticas["Nome_Categoria"].tolist() if not df_categorias_analiticas.empty else [""]
+                l_cats = ["", "TRANSFERÊNCIA"] + df_categorias_analiticas["Nome_Categoria"].tolist() if not df_categorias_analiticas.empty else ["", "TRANSFERÊNCIA"]
+                l_contas = df_contas["Nome_Conta"].tolist() if not df_contas.empty else []
+                
                 if not df_centros.empty:
                     col_nome_cen = "Centros_Custos" if "Centros_Custos" in df_centros.columns else "Nome_Centro"
                     l_cens = [""] + df_centros[col_nome_cen].tolist() if col_nome_cen in df_centros.columns else [""]
@@ -509,7 +535,7 @@ if check_password():
                 for idx, row in df_conciliado.iterrows():
                     linha_index = idx + 2
                     with st.container():
-                        c = st.columns([1, 2.5, 1, 1.5, 1.5, 0.8])
+                        c = st.columns([1, 2, 1, 1.5, 1.5, 0.8])
                         c[0].text(row["Data"])
                         c[1].text(row["Descricao"])
                         c[2].text(formatar_moeda_br(row["Valor"]))
@@ -518,10 +544,15 @@ if check_password():
                         val_cen_atual = row["Centro_Custo_ID"]
                         
                         idx_cat = l_cats.index(val_cat_atual) if val_cat_atual in l_cats else 0
-                        idx_cen = l_cens.index(val_cen_atual) if val_cen_atual in l_cens else 0
-
+                        
                         sel_cat = c[3].selectbox(f"Categoria", l_cats, index=idx_cat, key=f"cat_c_{idx}")
-                        sel_cen = c[4].selectbox(f"Centro Custo", l_cens, index=idx_cen, key=f"cen_c_{idx}")
+                        
+                        if sel_cat == "TRANSFERÊNCIA":
+                            idx_cen = l_contas.index(val_cen_atual) if val_cen_atual in l_contas else 0
+                            sel_cen = c[4].selectbox(f"Conta Destino", l_contas, index=idx_cen, key=f"cen_c_{idx}")
+                        else:
+                            idx_cen = l_cens.index(val_cen_atual) if val_cen_atual in l_cens else 0
+                            sel_cen = c[4].selectbox(f"Centro Custo", l_cens, index=idx_cen, key=f"cen_c_{idx}")
                         
                         if c[5].button("💾 Salvar", key=f"btn_c_{idx}"):
                             gc = conectar_planilha()
@@ -564,12 +595,15 @@ if check_password():
     elif menu == "Relatório Mensal":
         st.title("📊 Realizado Mensal (Estrutura Hierárquica)")
         if not df_lancamentos.empty and not df_categorias.empty:
-            df_lancamentos["Mes_Ano"] = pd.to_datetime(df_lancamentos["Data"], dayfirst=True).dt.strftime('%m/%Y')
+            # Filtro para ignorar transferências no DRE
+            df_dre_input = df_lancamentos[df_lancamentos["Categoria_ID"] != "TRANSFERÊNCIA"].copy()
+            
+            df_dre_input["Mes_Ano"] = pd.to_datetime(df_dre_input["Data"], dayfirst=True).dt.strftime('%m/%Y')
             
             map_codigos = dict(zip(df_categorias["Nome_Categoria"], df_categorias["Codigo"]))
-            df_lancamentos["Codigo"] = df_lancamentos["Categoria_ID"].map(map_codigos).astype(str)
+            df_dre_input["Codigo"] = df_dre_input["Categoria_ID"].map(map_codigos).astype(str)
             
-            df_pivot_ana = df_lancamentos.pivot_table(
+            df_pivot_ana = df_dre_input.pivot_table(
                 index="Codigo", columns="Mes_Ano", values="Valor", aggfunc="sum", fill_value=0
             )
             
