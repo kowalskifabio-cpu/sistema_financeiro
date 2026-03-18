@@ -19,7 +19,7 @@ NOME_ABA_CONTAS = "Contas"
 NOME_ABA_CATEGORIAS = "Categorias"
 NOME_ABA_CENTROS = "Centros_Custo"
 
-# Cabeçalho real da sua aba Lancamentos
+# Cabeçalho real da sua aba Lancamentos - ADICIONADO STATUS
 CABECALHO_LANCAMENTOS = [
     "Data",
     "Descricao",
@@ -27,7 +27,8 @@ CABECALHO_LANCAMENTOS = [
     "Categoria_ID",
     "Centro_Custo_ID",
     "Conta_ID",
-    "Documento_ID"
+    "Documento_ID",
+    "Status"
 ]
 
 CABECALHO_CONTAS = ["ID", "Nome_Conta", "Banco", "Saldo_Inicial"]
@@ -248,7 +249,8 @@ def processar_ofx(uploaded_file):
                 "Conta_ID": "",
                 "Documento_ID": str(documento).strip(),
                 "FITID": str(fitid).strip(),
-                "Tipo": str(trntype).strip()
+                "Tipo": str(trntype).strip(),
+                "Status": "PENDENTE"
             })
 
         df = pd.DataFrame(transacoes)
@@ -400,11 +402,15 @@ if check_password():
             # ---------------------------------------------------------
             elif menu == "Conciliação Bancária":
                 st.title("🤝 Conciliação de Pendências")
-                st.info("Aqui aparecem apenas os lançamentos sem Categoria ou sem Centro de Custo.")
+                st.info("Utilize os seletores e clique em 'Confirmar' linha por linha para conciliar.")
 
                 if not df_lancamentos.empty:
-                    # Filtra apenas o que NÃO está conciliado (vazio em algum dos campos chave)
-                    mask = (df_lancamentos["Categoria_ID"] == "") | (df_lancamentos["Centro_Custo_ID"] == "")
+                    # Filtra apenas o que não tem status CONCILIADO
+                    if "Status" in df_lancamentos.columns:
+                        mask = (df_lancamentos["Status"].astype(str).str.upper() != "CONCILIADO")
+                    else:
+                        mask = (df_lancamentos["Categoria_ID"] == "") | (df_lancamentos["Centro_Custo_ID"] == "")
+                    
                     df_pendente = df_lancamentos[mask].copy()
 
                     if df_pendente.empty:
@@ -414,53 +420,52 @@ if check_password():
                         
                         l_cats = [""] + df_categorias_analiticas["Nome_Categoria"].tolist() if not df_categorias_analiticas.empty else [""]
                         
-                        # CORREÇÃO PARA KeyError: 'Nome_Centro'
+                        # CORREÇÃO PARA GARANTIR CARREGAMENTO DOS CENTROS
                         if not df_centros.empty and "Nome_Centro" in df_centros.columns:
                             l_cens = [""] + df_centros["Nome_Centro"].tolist()
                         else:
                             l_cens = [""]
 
-                        with st.form("form_concilia"):
-                            atualizados = []
-                            for idx, row in df_pendente.iterrows():
-                                cols = st.columns([1, 2.5, 1, 1.5, 1.5])
-                                cols[0].text(row["Data"])
-                                cols[1].text(row["Descricao"])
-                                cols[2].text(formatar_moeda_br(row["Valor"]))
+                        # Exibição linha por linha com botão de confirmação individual
+                        for idx, row in df_pendente.iterrows():
+                            # Ajuste da linha na planilha (get_all_records ignora cabeçalho e começa em 0, logo idx + 2)
+                            linha_index = idx + 2
+                            
+                            with st.container():
+                                c = st.columns([1, 2.5, 1, 1.5, 1.5, 0.8])
+                                c[0].text(row["Data"])
+                                c[1].text(row["Descricao"])
+                                c[2].text(formatar_moeda_br(row["Valor"]))
                                 
-                                sel_cat = cols[3].selectbox(f"Categoria", l_cats, key=f"cat_p_{idx}")
-                                sel_cen = cols[4].selectbox(f"Centro Custo", l_cens, key=f"cen_p_{idx}")
+                                sel_cat = c[3].selectbox(f"Categoria", l_cats, key=f"cat_p_{idx}")
+                                sel_cen = c[4].selectbox(f"Centro Custo", l_cens, key=f"cen_p_{idx}")
                                 
-                                # Só adiciona à lista se ambos forem preenchidos (para garantir conciliação completa)
-                                if sel_cat != "" and sel_cen != "":
-                                    atualizados.append({
-                                        "linha": idx + 2,
-                                        "categoria": sel_cat,
-                                        "centro": sel_cen
-                                    })
+                                if c[5].button("✅ Confirmar", key=f"btn_p_{idx}"):
+                                    if sel_cat == "" or sel_cen == "":
+                                        st.error("Selecione Categoria e Centro de Custo.")
+                                    else:
+                                        ws_l = sh.worksheet(NOME_ABA_LANCAMENTOS)
+                                        # Coluna 4: Categoria, Coluna 5: Centro, Coluna 8: Status
+                                        ws_l.update_cell(linha_index, 4, sel_cat)
+                                        ws_l.update_cell(linha_index, 5, sel_cen)
+                                        ws_l.update_cell(linha_index, 8, "CONCILIADO")
+                                        st.success(f"Linha {linha_index} conciliada!")
+                                        st.rerun()
                                 st.divider()
-
-                            if st.form_submit_button("💾 Confirmar e Conciliar"):
-                                if not atualizados:
-                                    st.warning("Selecione Categoria e Centro de Custo para salvar.")
-                                else:
-                                    ws_lanc = obter_aba(sh, NOME_ABA_LANCAMENTOS, CABECALHO_LANCAMENTOS)
-                                    for acao in atualizados:
-                                        ws_lanc.update_cell(acao["linha"], 4, acao["categoria"])
-                                        ws_lanc.update_cell(acao["linha"], 5, acao["centro"])
-                                    st.success(f"{len(atualizados)} lançamentos conciliados!")
-                                    st.rerun()
 
             # ---------------------------------------------------------
             # MENU: LANÇAMENTOS CONCILIADOS (CORREÇÃO)
             # ---------------------------------------------------------
             elif menu == "Lançamentos Conciliados":
                 st.title("✅ Lançamentos Conciliados")
-                st.info("Aqui você pode revisar e corrigir lançamentos já categorizados.")
+                st.info("Revise o que já foi confirmado. Se alterar aqui, o lançamento continuará nesta aba.")
 
                 if not df_lancamentos.empty:
-                    # Filtra apenas o que já tem ambos preenchidos
-                    mask_conciliado = (df_lancamentos["Categoria_ID"] != "") & (df_lancamentos["Centro_Custo_ID"] != "")
+                    if "Status" in df_lancamentos.columns:
+                        mask_conciliado = (df_lancamentos["Status"].astype(str).str.upper() == "CONCILIADO")
+                    else:
+                        mask_conciliado = (df_lancamentos["Categoria_ID"] != "") & (df_lancamentos["Centro_Custo_ID"] != "")
+                        
                     df_conciliado = df_lancamentos[mask_conciliado].copy()
 
                     if df_conciliado.empty:
@@ -472,43 +477,30 @@ if check_password():
                         else:
                             l_cens = [""]
 
-                        with st.form("form_correcao"):
-                            corrigidos = []
-                            for idx, row in df_conciliado.iterrows():
-                                cols = st.columns([1, 2.5, 1, 1.5, 1.5])
-                                cols[0].text(row["Data"])
-                                cols[1].text(row["Descricao"])
-                                cols[2].text(formatar_moeda_br(row["Valor"]))
+                        for idx, row in df_conciliado.iterrows():
+                            linha_index = idx + 2
+                            with st.container():
+                                c = st.columns([1, 2.5, 1, 1.5, 1.5, 0.8])
+                                c[0].text(row["Data"])
+                                c[1].text(row["Descricao"])
+                                c[2].text(formatar_moeda_br(row["Valor"]))
                                 
-                                # Valor padrão é o que já está na planilha
                                 val_cat_atual = row["Categoria_ID"]
                                 val_cen_atual = row["Centro_Custo_ID"]
                                 
-                                # Tenta encontrar o índice atual na lista para o selectbox
                                 idx_cat = l_cats.index(val_cat_atual) if val_cat_atual in l_cats else 0
                                 idx_cen = l_cens.index(val_cen_atual) if val_cen_atual in l_cens else 0
 
-                                sel_cat = cols[3].selectbox(f"Categoria", l_cats, index=idx_cat, key=f"cat_c_{idx}")
-                                sel_cen = cols[4].selectbox(f"Centro Custo", l_cens, index=idx_cen, key=f"cen_c_{idx}")
+                                sel_cat = c[3].selectbox(f"Categoria", l_cats, index=idx_cat, key=f"cat_c_{idx}")
+                                sel_cen = c[4].selectbox(f"Centro Custo", l_cens, index=idx_cen, key=f"cen_c_{idx}")
                                 
-                                if sel_cat != val_cat_atual or sel_cen != val_cen_atual:
-                                    corrigidos.append({
-                                        "linha": idx + 2,
-                                        "categoria": sel_cat,
-                                        "centro": sel_cen
-                                    })
-                                st.divider()
-
-                            if st.form_submit_button("💾 Salvar Alterações"):
-                                if not corrigidos:
-                                    st.info("Nenhuma alteração detectada.")
-                                else:
-                                    ws_lanc = obter_aba(sh, NOME_ABA_LANCAMENTOS, CABECALHO_LANCAMENTOS)
-                                    for acao in corrigidos:
-                                        ws_lanc.update_cell(acao["linha"], 4, acao["categoria"])
-                                        ws_lanc.update_cell(acao["linha"], 5, acao["centro"])
-                                    st.success(f"{len(corrigidos)} lançamentos atualizados!")
+                                if c[5].button("💾 Salvar", key=f"btn_c_{idx}"):
+                                    ws_l = sh.worksheet(NOME_ABA_LANCAMENTOS)
+                                    ws_l.update_cell(linha_index, 4, sel_cat)
+                                    ws_l.update_cell(linha_index, 5, sel_cen)
+                                    st.success(f"Atualizado!")
                                     st.rerun()
+                                st.divider()
 
             # ---------------------------------------------------------
             # MENU: RESUMO
@@ -554,7 +546,6 @@ if check_password():
                     colunas_meses = sorted(df_pivot_ana.columns.tolist())
                     relatorio_final = []
                     
-                    # Ordenação garantida como string
                     df_cats_ord = df_categorias.sort_values(by="Codigo")
                     
                     for _, cat in df_cats_ord.iterrows():
@@ -565,7 +556,6 @@ if check_password():
                         linha_dre = {"Código": codigo_pai, "Descrição": ("  " * (nivel - 1)) + nome_cat}
                         
                         for mes in colunas_meses:
-                            # Filtra no pivot todos os códigos que iniciam com o código da categoria atual
                             mask = df_pivot_ana.index.astype(str).str.startswith(codigo_pai)
                             valor_total = df_pivot_ana[mask][mes].sum()
                             linha_dre[mes] = valor_total
@@ -603,7 +593,6 @@ if check_password():
                         f_c = st.text_input("Código (ex: 3.01.01.001)")
                         f_n = st.text_input("Nome da Categoria")
                         f_t = st.selectbox("Tipo", ["Receita", "Despesa"])
-                        # Checkbox para definir se aceita lançamentos direto
                         permite = st.checkbox("Esta categoria aceita lançamentos diretos? (Analítica)", value=True)
                         
                         if st.form_submit_button("Salvar Categoria"):
@@ -615,8 +604,6 @@ if check_password():
                     if not df_categorias.empty and "Codigo" in df_categorias.columns:
                         df_categorias["Codigo"] = df_categorias["Codigo"].astype(str)
                         st.dataframe(df_categorias.sort_values(by="Codigo"))
-                    else:
-                        st.error("A coluna 'Codigo' não foi encontrada ou está vazia.")
 
                 with tab3:
                     st.subheader("Novos Centros de Custo")
