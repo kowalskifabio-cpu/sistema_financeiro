@@ -189,22 +189,26 @@ def formatar_data_ofx(dt_raw):
 def para_float(valor):
     """
     Converte strings financeiras variadas para float puro.
-    Lida com a divergência de formatos entre Planilha (PT-BR) e Python.
+    Lida com a divergência onde -11,69 é interpretado como -1169.
     """
-    if valor is None:
+    if valor is None or valor == "":
         return 0.0
 
-    # Remove espaços e símbolos monetários
-    valor = str(valor).strip().replace("R$", "").replace(" ", "")
-    if valor == "":
-        return 0.0
-
-    try:
-        # Se contiver vírgula, assume padrão brasileiro (1.234,56)
-        if "," in valor:
-            # Remove o ponto (milhar) e troca a vírgula por ponto (decimal)
-            valor = valor.replace(".", "").replace(",", ".")
+    # Se já for float ou int, apenas retorna
+    if isinstance(valor, (int, float)):
         return float(valor)
+
+    # Limpeza de string
+    s = str(valor).strip().replace("R$", "").replace(" ", "")
+    
+    try:
+        # Lógica Robusta: Se tiver vírgula e ponto, o ponto é milhar.
+        # Se tiver apenas vírgula, a vírgula é o decimal.
+        if "," in s:
+            if "." in s:
+                s = s.replace(".", "") # Remove ponto de milhar
+            s = s.replace(",", ".") # Troca vírgula decimal por ponto
+        return float(s)
     except Exception:
         return 0.0
 
@@ -288,12 +292,21 @@ def obter_aba(sh, nome_aba, cabecalho):
         return ws
 
 def carregar_dados_aba(sh, nome_aba, cabecalho):
-    """Lê todos os registros de uma aba específica."""
+    """Lê todos os registros de uma aba específica e força saneamento de valores."""
     ws = obter_aba(sh, nome_aba, cabecalho)
     registros = ws.get_all_records()
     if not registros:
         return pd.DataFrame(columns=cabecalho)
-    return pd.DataFrame(registros)
+    
+    df = pd.DataFrame(registros)
+    
+    # Saneamento preventivo na coluna Valor (se existir)
+    if "Valor" in df.columns:
+        df["Valor"] = df["Valor"].apply(para_float)
+    if "Saldo_Inicial" in df.columns:
+        df["Saldo_Inicial"] = df["Saldo_Inicial"].apply(para_float)
+        
+    return df
 
 def gravar_transacoes_na_planilha(df_import):
     """Grava as transações importadas evitando duplicidade."""
@@ -423,13 +436,9 @@ if check_password():
                         
                         l_cats = [""] + df_categorias_analiticas["Nome_Categoria"].tolist() if not df_categorias_analiticas.empty else [""]
                         
-                        # CORREÇÃO PARA GARANTIR CARREGAMENTO DOS CENTROS CONFORME SUA PLANILHA
                         if not df_centros.empty:
                             col_nome_cen = "Centros_Custos" if "Centros_Custos" in df_centros.columns else "Nome_Centro"
-                            if col_nome_cen in df_centros.columns:
-                                l_cens = [""] + df_centros[col_nome_cen].tolist()
-                            else:
-                                l_cens = [""]
+                            l_cens = [""] + df_centros[col_nome_cen].tolist() if col_nome_cen in df_centros.columns else [""]
                         else:
                             l_cens = [""]
 
@@ -441,9 +450,8 @@ if check_password():
                                 c = st.columns([1, 2.5, 1, 1.5, 1.5, 0.8])
                                 c[0].text(row["Data"])
                                 c[1].text(row["Descricao"])
-                                # Usa a função de tratamento para exibição correta
-                                valor_corrigido = para_float(row["Valor"])
-                                c[2].text(formatar_moeda_br(valor_corrigido))
+                                # O valor aqui já foi saneado no carregar_dados_aba
+                                c[2].text(formatar_moeda_br(row["Valor"]))
                                 
                                 sel_cat = c[3].selectbox(f"Categoria", l_cats, key=f"cat_p_{idx}")
                                 sel_cen = c[4].selectbox(f"Centro Custo", l_cens, key=f"cen_p_{idx}")
@@ -491,8 +499,7 @@ if check_password():
                                 c = st.columns([1, 2.5, 1, 1.5, 1.5, 0.8])
                                 c[0].text(row["Data"])
                                 c[1].text(row["Descricao"])
-                                valor_corrigido = para_float(row["Valor"])
-                                c[2].text(formatar_moeda_br(valor_corrigido))
+                                c[2].text(formatar_moeda_br(row["Valor"]))
                                 
                                 val_cat_atual = row["Categoria_ID"]
                                 val_cen_atual = row["Centro_Custo_ID"]
@@ -523,8 +530,8 @@ if check_password():
                         saldos_lista = []
                         for _, row in df_contas.iterrows():
                             conta_nome = row["Nome_Conta"]
-                            saldo_inicial = para_float(row["Saldo_Inicial"])
-                            movimentacao = para_float(df_lancamentos[df_lancamentos["Conta_ID"] == conta_nome]["Valor"].sum())
+                            saldo_inicial = row["Saldo_Inicial"] # Já é float pelo saneamento
+                            movimentacao = df_lancamentos[df_lancamentos["Conta_ID"] == conta_nome]["Valor"].sum()
                             saldos_lista.append({"Conta": conta_nome, "Saldo Atual": saldo_inicial + movimentacao})
                         
                         df_resumo_saldos = pd.DataFrame(saldos_lista)
@@ -543,7 +550,6 @@ if check_password():
                 st.title("📊 Realizado Mensal (Estrutura Hierárquica)")
                 if not df_lancamentos.empty and not df_categorias.empty:
                     df_lancamentos["Mes_Ano"] = pd.to_datetime(df_lancamentos["Data"], dayfirst=True).dt.strftime('%m/%Y')
-                    df_lancamentos["Valor"] = df_lancamentos["Valor"].apply(para_float)
                     
                     map_codigos = dict(zip(df_categorias["Nome_Categoria"], df_categorias["Codigo"]))
                     df_lancamentos["Codigo"] = df_lancamentos["Categoria_ID"].map(map_codigos).astype(str)
