@@ -31,7 +31,7 @@ CABECALHO_LANCAMENTOS = [
 ]
 
 CABECALHO_CONTAS = ["ID", "Nome_Conta", "Banco", "Saldo_Inicial"]
-# ADICIONADO: Coluna Permite_Lancamento para distinguir Sintética de Analítica
+# Suporta a estrutura hierárquica por pontos (ex: 3.01.01.001)
 CABECALHO_CATEGORIAS = ["Codigo", "Nome_Categoria", "Tipo", "Permite_Lancamento"]
 CABECALHO_CENTROS = ["ID", "Nome_Centro"]
 
@@ -342,7 +342,7 @@ if check_password():
             df_centros = carregar_dados_aba(sh, NOME_ABA_CENTROS, CABECALHO_CENTROS)
             df_lancamentos = carregar_dados_aba(sh, NOME_ABA_LANCAMENTOS, CABECALHO_LANCAMENTOS)
 
-            # Forçar Codigo para String para evitar erros de ordenação
+            # Forçar Codigo para String para evitar erros de ordenação (TypeError)
             if not df_categorias.empty and "Codigo" in df_categorias.columns:
                 df_categorias["Codigo"] = df_categorias["Codigo"].astype(str)
 
@@ -373,7 +373,7 @@ if check_password():
                         
                         conta_sel = st.selectbox(
                             "Vincular à Conta Bancária:", 
-                            df_contas["Nome_Conta"].tolist() if not df_contas.empty else ["Nenhuma conta cadastrada"]
+                            df_contas["Nome_Conta"].tolist() if not df_contas.empty and "Nome_Conta" in df_contas.columns else ["Nenhuma conta cadastrada"]
                         )
                         
                         df_import["Conta_ID"] = conta_sel
@@ -412,8 +412,13 @@ if check_password():
                         st.write(f"Pendentes: {len(df_pendente)}")
                         
                         # USANDO APENAS AS CATEGORIAS ANALÍTICAS NO SELETOR
-                        l_cats = [""] + df_categorias_analiticas["Nome_Categoria"].tolist() if not df_categorias_analiticas.empty else [""]
-                        l_cens = [""] + df_centros["Nome_Centro"].tolist() if not df_centros.empty else [""]
+                        l_cats = [""] + df_categorias_analiticas["Nome_Categoria"].tolist() if not df_categorias_analiticas.empty and "Nome_Categoria" in df_categorias_analiticas.columns else [""]
+                        
+                        # CORREÇÃO PARA KeyError: 'Nome_Centro'
+                        if not df_centros.empty and "Nome_Centro" in df_centros.columns:
+                            l_cens = [""] + df_centros["Nome_Centro"].tolist()
+                        else:
+                            l_cens = [""]
 
                         with st.form("form_concilia"):
                             atualizados = []
@@ -447,7 +452,7 @@ if check_password():
             # ---------------------------------------------------------
             elif menu == "Resumo":
                 st.title("📊 Resumo Financeiro")
-                if not df_contas.empty:
+                if not df_contas.empty and "Nome_Conta" in df_contas.columns:
                     c1, c2 = st.columns(2)
                     with c1:
                         st.subheader("Saldos por Conta")
@@ -535,7 +540,7 @@ if check_password():
                         f_c = st.text_input("Código (ex: 3.01.01.001)")
                         f_n = st.text_input("Nome da Categoria")
                         f_t = st.selectbox("Tipo", ["Receita", "Despesa"])
-                        # NOVA FUNCIONALIDADE: Checkbox para definir se aceita lançamentos direto
+                        # Checkbox para definir se aceita lançamentos direto
                         permite = st.checkbox("Esta categoria aceita lançamentos diretos? (Analítica)", value=True)
                         
                         if st.form_submit_button("Salvar Categoria"):
