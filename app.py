@@ -187,24 +187,26 @@ def formatar_data_ofx(dt_raw):
 
 
 def para_float(valor):
-    """Converte strings financeiras variadas para float puro."""
+    """
+    Converte strings financeiras variadas para float puro.
+    Lida com a divergência de formatos entre Planilha (PT-BR) e Python.
+    """
     if valor is None:
         return 0.0
 
-    valor = str(valor).strip()
+    # Remove espaços e símbolos monetários
+    valor = str(valor).strip().replace("R$", "").replace(" ", "")
     if valor == "":
         return 0.0
 
-    valor = valor.replace(" ", "")
-
     try:
+        # Se contiver vírgula, assume padrão brasileiro (1.234,56)
+        if "," in valor:
+            # Remove o ponto (milhar) e troca a vírgula por ponto (decimal)
+            valor = valor.replace(".", "").replace(",", ".")
         return float(valor)
     except Exception:
-        try:
-            valor = valor.replace(".", "").replace(",", ".")
-            return float(valor)
-        except Exception:
-            return 0.0
+        return 0.0
 
 
 def processar_ofx(uploaded_file):
@@ -423,7 +425,6 @@ if check_password():
                         
                         # CORREÇÃO PARA GARANTIR CARREGAMENTO DOS CENTROS CONFORME SUA PLANILHA
                         if not df_centros.empty:
-                            # Tenta Centros_Custos (conforme imagem) ou Nome_Centro
                             col_nome_cen = "Centros_Custos" if "Centros_Custos" in df_centros.columns else "Nome_Centro"
                             if col_nome_cen in df_centros.columns:
                                 l_cens = [""] + df_centros[col_nome_cen].tolist()
@@ -440,7 +441,9 @@ if check_password():
                                 c = st.columns([1, 2.5, 1, 1.5, 1.5, 0.8])
                                 c[0].text(row["Data"])
                                 c[1].text(row["Descricao"])
-                                c[2].text(formatar_moeda_br(row["Valor"]))
+                                # Usa a função de tratamento para exibição correta
+                                valor_corrigido = para_float(row["Valor"])
+                                c[2].text(formatar_moeda_br(valor_corrigido))
                                 
                                 sel_cat = c[3].selectbox(f"Categoria", l_cats, key=f"cat_p_{idx}")
                                 sel_cen = c[4].selectbox(f"Centro Custo", l_cens, key=f"cen_p_{idx}")
@@ -488,7 +491,8 @@ if check_password():
                                 c = st.columns([1, 2.5, 1, 1.5, 1.5, 0.8])
                                 c[0].text(row["Data"])
                                 c[1].text(row["Descricao"])
-                                c[2].text(formatar_moeda_br(row["Valor"]))
+                                valor_corrigido = para_float(row["Valor"])
+                                c[2].text(formatar_moeda_br(valor_corrigido))
                                 
                                 val_cat_atual = row["Categoria_ID"]
                                 val_cen_atual = row["Centro_Custo_ID"]
@@ -539,7 +543,7 @@ if check_password():
                 st.title("📊 Realizado Mensal (Estrutura Hierárquica)")
                 if not df_lancamentos.empty and not df_categorias.empty:
                     df_lancamentos["Mes_Ano"] = pd.to_datetime(df_lancamentos["Data"], dayfirst=True).dt.strftime('%m/%Y')
-                    df_lancamentos["Valor"] = df_lancamentos["Valor"].astype(float)
+                    df_lancamentos["Valor"] = df_lancamentos["Valor"].apply(para_float)
                     
                     map_codigos = dict(zip(df_categorias["Nome_Categoria"], df_categorias["Codigo"]))
                     df_lancamentos["Codigo"] = df_lancamentos["Categoria_ID"].map(map_codigos).astype(str)
