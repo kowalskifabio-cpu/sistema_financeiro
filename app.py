@@ -674,8 +674,27 @@ if check_password():
             # Lista de colunas numéricas para formatação
             colunas_formato = colunas_meses + ["Total Acumulado", "Média Mensal"]
             
-            # Aplica a formatação de moeda
-            st.dataframe(df_dre.style.format({m: formatar_moeda_br for m in colunas_formato}), use_container_width=True)
+            # LÓGICA DE ESTILIZAÇÃO POR NÍVEL (MELHORIA SOLICITADA)
+            def aplicar_cores(row):
+                nivel = row["Nível"]
+                # Nível 1: Azul Marinho / Branco / Negrito
+                if nivel == 1:
+                    return ['background-color: #002060; color: white; font-weight: bold'] * len(row)
+                # Nível 2: Azul Claro / Preto / Negrito
+                if nivel == 2:
+                    return ['background-color: #BDD7EE; color: black; font-weight: bold'] * len(row)
+                # Nível 3: Cinza / Preto / Negrito
+                if nivel == 3:
+                    return ['background-color: #D9D9D9; color: black; font-weight: bold'] * len(row)
+                # Nível 4: Branco / Preto / Normal
+                return ['background-color: white; color: black'] * len(row)
+
+            # Aplica os estilos e a formatação de moeda
+            st.dataframe(
+                df_dre.style.apply(aplicar_cores, axis=1).format({m: formatar_moeda_br for m in colunas_formato}), 
+                use_container_width=True, 
+                height=600
+            )
             
         else:
             st.info("Dados insuficientes para gerar o DRE.")
