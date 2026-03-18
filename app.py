@@ -62,7 +62,7 @@ def identificar_nivel(codigo):
     return len(cod_str.split('.'))
 
 # =========================================================
-# GOOGLE SHEETS
+# GOOGLE SHEETS COM SUPORTE A CACHE (USO EM MEMÓRIA)
 # =========================================================
 def conectar_planilha():
     """Conecta ao Google Sheets usando st.secrets."""
@@ -85,6 +85,41 @@ def conectar_planilha():
         st.error(f"Erro na conexão com Google Sheets: {type(e).__name__}: {e}")
         return None
 
+@st.cache_data(ttl=600)  # Mantém os dados em memória por 10 minutos
+def carregar_dados_cache(nome_aba, cabecalho):
+    """
+    Lê todos os registros de uma aba específica e armazena em cache.
+    Resolve o erro 429 de Quota Exceeded e agiliza a navegação.
+    """
+    gc = conectar_planilha()
+    if not gc:
+        return pd.DataFrame(columns=cabecalho)
+    
+    try:
+        sh = gc.open_by_key(ID_DA_PLANILHA)
+        try:
+            ws = sh.worksheet(nome_aba)
+        except Exception:
+            ws = sh.add_worksheet(title=nome_aba, rows=5000, cols=20)
+            ws.append_row(cabecalho)
+        
+        # get_all_values evita interpretações automáticas erradas de tipos numéricos
+        dados = ws.get_all_values()
+        if len(dados) <= 1:
+            return pd.DataFrame(columns=cabecalho)
+        
+        df = pd.DataFrame(dados[1:], columns=dados[0])
+        
+        # Saneamento preventivo nas colunas de Valor
+        if "Valor" in df.columns:
+            df["Valor"] = df["Valor"].apply(para_float)
+        if "Saldo_Inicial" in df.columns:
+            df["Saldo_Inicial"] = df["Saldo_Inicial"].apply(para_float)
+            
+        return df
+    except Exception as e:
+        st.error(f"Erro ao carregar dados da aba {nome_aba}: {e}")
+        return pd.DataFrame(columns=cabecalho)
 
 # =========================================================
 # LOGIN
@@ -279,36 +314,8 @@ def processar_ofx(uploaded_file):
 
 
 # =========================================================
-# PLANILHA - OPERAÇÕES
+# PLANILHA - OPERAÇÕES DE GRAVAÇÃO (SEM CACHE)
 # =========================================================
-def obter_aba(sh, nome_aba, cabecalho):
-    """Retorna a worksheet da aba, criando-a se necessário."""
-    try:
-        return sh.worksheet(nome_aba)
-    except Exception:
-        ws = sh.add_worksheet(title=nome_aba, rows=5000, cols=20)
-        ws.append_row(cabecalho)
-        return ws
-
-def carregar_dados_aba(sh, nome_aba, cabecalho):
-    """Lê todos os registros forçando a captura de valores como texto formatado."""
-    ws = obter_aba(sh, nome_aba, cabecalho)
-    # CRITICAL FIX: Captura os valores exatamente como aparecem na tela da planilha
-    registros = ws.get_all_records(value_render_option="FORMATTED_VALUE")
-    
-    if not registros:
-        return pd.DataFrame(columns=cabecalho)
-    
-    df = pd.DataFrame(registros)
-    
-    # Aplica o saneamento robusto em colunas financeiras
-    if "Valor" in df.columns:
-        df["Valor"] = df["Valor"].apply(para_float)
-    if "Saldo_Inicial" in df.columns:
-        df["Saldo_Inicial"] = df["Saldo_Inicial"].apply(para_float)
-        
-    return df
-
 def gravar_transacoes_na_planilha(df_import):
     """Grava as transações importadas evitando duplicidade."""
     gc = conectar_planilha()
@@ -317,9 +324,10 @@ def gravar_transacoes_na_planilha(df_import):
 
     try:
         sh = gc.open_by_key(ID_DA_PLANILHA)
-        ws = obter_aba(sh, NOME_ABA_LANCAMENTOS, CABECALHO_LANCAMENTOS)
+        ws = sh.worksheet(NOME_ABA_LANCAMENTOS)
 
-        df_planilha = carregar_dados_aba(sh, NOME_ABA_LANCAMENTOS, CABECALHO_LANCAMENTOS)
+        # Para gravar, precisamos comparar com o que já existe (usando cache para rapidez)
+        df_planilha = carregar_dados_cache(NOME_ABA_LANCAMENTOS, CABECALHO_LANCAMENTOS)
 
         if df_import.empty:
             st.warning("Não há dados para gravar.")
@@ -340,6 +348,9 @@ def gravar_transacoes_na_planilha(df_import):
 
         novos_para_gravar = novos[CABECALHO_LANCAMENTOS]
         ws.append_rows(novos_para_gravar.values.tolist(), value_input_option="USER_ENTERED")
+        
+        # LIMPANDO CACHE após gravação para que os novos dados apareçam
+        st.cache_data.clear()
         st.success(f"Sucesso. {len(novos)} lançamentos gravados.")
 
     except Exception as e:
@@ -350,288 +361,298 @@ def gravar_transacoes_na_planilha(df_import):
 # INTERFACE
 # =========================================================
 if check_password():
-    gc = conectar_planilha()
-    if gc:
-        try:
-            sh = gc.open_by_key(ID_DA_PLANILHA)
-            
-            # Carregamento em tempo real dos cadastros
-            df_contas = carregar_dados_aba(sh, NOME_ABA_CONTAS, CABECALHO_CONTAS)
-            df_categorias = carregar_dados_aba(sh, NOME_ABA_CATEGORIAS, CABECALHO_CATEGORIAS)
-            df_centros = carregar_dados_aba(sh, NOME_ABA_CENTROS, CABECALHO_CENTROS)
-            df_lancamentos = carregar_dados_aba(sh, NOME_ABA_LANCAMENTOS, CABECALHO_LANCAMENTOS)
+    # CARREGAMENTO OTIMIZADO (Uso em memória via Cache)
+    df_contas = carregar_dados_cache(NOME_ABA_CONTAS, CABECALHO_CONTAS)
+    df_categorias = carregar_dados_cache(NOME_ABA_CATEGORIAS, CABECALHO_CATEGORIAS)
+    df_centros = carregar_dados_cache(NOME_ABA_CENTROS, CABECALHO_CENTROS)
+    df_lancamentos = carregar_dados_cache(NOME_ABA_LANCAMENTOS, CABECALHO_LANCAMENTOS)
 
-            # Forçar Codigo para String para evitar erros de ordenação (TypeError)
+    # Forçar Codigo para String para evitar erros de ordenação (TypeError)
+    if not df_categorias.empty and "Codigo" in df_categorias.columns:
+        df_categorias["Codigo"] = df_categorias["Codigo"].astype(str)
+
+    # FILTRO: Apenas categorias analíticas que permitem lançamento
+    if not df_categorias.empty and "Permite_Lancamento" in df_categorias.columns:
+        df_categorias_analiticas = df_categorias[df_categorias["Permite_Lancamento"].astype(str).str.upper() == "SIM"].copy()
+    else:
+        df_categorias_analiticas = df_categorias.copy()
+
+    st.sidebar.title("Navegação")
+    # Botão manual para forçar recarregamento da planilha se necessário
+    if st.sidebar.button("🔄 Sincronizar Planilha"):
+        st.cache_data.clear()
+        st.rerun()
+
+    menu = st.sidebar.radio(
+        "Ir para:",
+        ["Resumo", "Relatório Mensal", "Importar Extrato", "Conciliação Bancária", "Lançamentos Conciliados", "Cadastros"]
+    )
+
+    # ---------------------------------------------------------
+    # MENU: IMPORTAR EXTRATO
+    # ---------------------------------------------------------
+    if menu == "Importar Extrato":
+        st.title("📥 Importação de Extratos (.OFX)")
+        uploaded_file = st.file_uploader("Upload do arquivo bancário", type=["ofx"])
+
+        if uploaded_file:
+            df_import = processar_ofx(uploaded_file)
+
+            if not df_import.empty:
+                st.subheader("Transações Detectadas")
+                
+                conta_sel = st.selectbox(
+                    "Vincular à Conta Bancária:", 
+                    df_contas["Nome_Conta"].tolist() if not df_contas.empty and "Nome_Conta" in df_contas.columns else ["Nenhuma conta cadastrada"]
+                )
+                
+                df_import["Conta_ID"] = conta_sel
+
+                col_exib = ["Data", "Descricao", "Valor", "Tipo"]
+                st.dataframe(df_import[col_exib], use_container_width=True)
+
+                c1, c2 = st.columns(2)
+                with c1:
+                    st.metric("Total de Lançamentos", len(df_import))
+                with c2:
+                    total_import = df_import["Valor"].sum()
+                    st.metric("Soma do Extrato", formatar_moeda_br(total_import))
+
+                if st.button("🚀 Confirmar Gravação"):
+                    if conta_sel == "Nenhuma conta cadastrada":
+                        st.error("Cadastre uma conta antes de importar.")
+                    else:
+                        gravar_transacoes_na_planilha(df_import)
+                        st.rerun()
+
+    # ---------------------------------------------------------
+    # MENU: CONCILIAÇÃO BANCÁRIA (PENDÊNCIAS)
+    # ---------------------------------------------------------
+    elif menu == "Conciliação Bancária":
+        st.title("🤝 Conciliação de Pendências")
+        st.info("Utilize os seletores e clique em 'Confirmar' linha por linha para conciliar.")
+
+        if not df_lancamentos.empty:
+            # Filtra apenas o que não tem status CONCILIADO
+            if "Status" in df_lancamentos.columns:
+                mask = (df_lancamentos["Status"].astype(str).str.upper() != "CONCILIADO")
+            else:
+                mask = (df_lancamentos["Categoria_ID"] == "") | (df_lancamentos["Centro_Custo_ID"] == "")
+            
+            df_pendente = df_lancamentos[mask].copy()
+
+            if df_pendente.empty:
+                st.success("🎉 Não existem lançamentos pendentes!")
+            else:
+                st.write(f"Lançamentos para tratar: {len(df_pendente)}")
+                
+                l_cats = [""] + df_categorias_analiticas["Nome_Categoria"].tolist() if not df_categorias_analiticas.empty else [""]
+                
+                if not df_centros.empty:
+                    col_nome_cen = "Centros_Custos" if "Centros_Custos" in df_centros.columns else "Nome_Centro"
+                    l_cens = [""] + df_centros[col_nome_cen].tolist() if col_nome_cen in df_centros.columns else [""]
+                else:
+                    l_cens = [""]
+
+                # Exibição linha por linha com botão de confirmação individual
+                for idx, row in df_pendente.iterrows():
+                    linha_index = idx + 2
+                    
+                    with st.container():
+                        c = st.columns([1, 2.5, 1, 1.5, 1.5, 0.8])
+                        c[0].text(row["Data"])
+                        c[1].text(row["Descricao"])
+                        c[2].text(formatar_moeda_br(row["Valor"]))
+                        
+                        sel_cat = c[3].selectbox(f"Categoria", l_cats, key=f"cat_p_{idx}")
+                        sel_cen = c[4].selectbox(f"Centro Custo", l_cens, key=f"cen_p_{idx}")
+                        
+                        if c[5].button("✅ Confirmar", key=f"btn_p_{idx}"):
+                            if sel_cat == "" or sel_cen == "":
+                                st.error("Selecione Categoria e Centro de Custo.")
+                            else:
+                                gc = conectar_planilha()
+                                ws_l = gc.open_by_key(ID_DA_PLANILHA).worksheet(NOME_ABA_LANCAMENTOS)
+                                ws_l.update_cell(linha_index, 4, sel_cat)
+                                ws_l.update_cell(linha_index, 5, sel_cen)
+                                ws_l.update_cell(linha_index, 8, "CONCILIADO")
+                                st.cache_data.clear() # Limpa cache para refletir a alteração
+                                st.success(f"Linha {linha_index} conciliada!")
+                                st.rerun()
+                        st.divider()
+
+    # ---------------------------------------------------------
+    # MENU: LANÇAMENTOS CONCILIADOS (CORREÇÃO)
+    # ---------------------------------------------------------
+    elif menu == "Lançamentos Conciliados":
+        st.title("✅ Lançamentos Conciliados")
+        st.info("Revise o que já foi confirmado. Se alterar aqui, o lançamento continuará nesta aba.")
+
+        if not df_lancamentos.empty:
+            if "Status" in df_lancamentos.columns:
+                mask_conciliado = (df_lancamentos["Status"].astype(str).str.upper() == "CONCILIADO")
+            else:
+                mask_conciliado = (df_lancamentos["Categoria_ID"] != "") & (df_lancamentos["Centro_Custo_ID"] != "")
+                
+            df_conciliado = df_lancamentos[mask_conciliado].copy()
+
+            if df_conciliado.empty:
+                st.info("Nenhum lançamento conciliado encontrado.")
+            else:
+                l_cats = [""] + df_categorias_analiticas["Nome_Categoria"].tolist() if not df_categorias_analiticas.empty else [""]
+                if not df_centros.empty:
+                    col_nome_cen = "Centros_Custos" if "Centros_Custos" in df_centros.columns else "Nome_Centro"
+                    l_cens = [""] + df_centros[col_nome_cen].tolist() if col_nome_cen in df_centros.columns else [""]
+                else:
+                    l_cens = [""]
+
+                for idx, row in df_conciliado.iterrows():
+                    linha_index = idx + 2
+                    with st.container():
+                        c = st.columns([1, 2.5, 1, 1.5, 1.5, 0.8])
+                        c[0].text(row["Data"])
+                        c[1].text(row["Descricao"])
+                        c[2].text(formatar_moeda_br(row["Valor"]))
+                        
+                        val_cat_atual = row["Categoria_ID"]
+                        val_cen_atual = row["Centro_Custo_ID"]
+                        
+                        idx_cat = l_cats.index(val_cat_atual) if val_cat_atual in l_cats else 0
+                        idx_cen = l_cens.index(val_cen_atual) if val_cen_atual in l_cens else 0
+
+                        sel_cat = c[3].selectbox(f"Categoria", l_cats, index=idx_cat, key=f"cat_c_{idx}")
+                        sel_cen = c[4].selectbox(f"Centro Custo", l_cens, index=idx_cen, key=f"cen_c_{idx}")
+                        
+                        if c[5].button("💾 Salvar", key=f"btn_c_{idx}"):
+                            gc = conectar_planilha()
+                            ws_l = gc.open_by_key(ID_DA_PLANILHA).worksheet(NOME_ABA_LANCAMENTOS)
+                            ws_l.update_cell(linha_index, 4, sel_cat)
+                            ws_l.update_cell(linha_index, 5, sel_cen)
+                            st.cache_data.clear()
+                            st.success(f"Atualizado!")
+                            st.rerun()
+                        st.divider()
+
+    # ---------------------------------------------------------
+    # MENU: RESUMO
+    # ---------------------------------------------------------
+    elif menu == "Resumo":
+        st.title("📊 Resumo Financeiro")
+        if not df_contas.empty and "Nome_Conta" in df_contas.columns:
+            c1, c2 = st.columns(2)
+            with c1:
+                st.subheader("Saldos por Conta")
+                saldos_lista = []
+                for _, row in df_contas.iterrows():
+                    conta_nome = row["Nome_Conta"]
+                    saldo_inicial = row["Saldo_Inicial"] 
+                    movimentacao = df_lancamentos[df_lancamentos["Conta_ID"] == conta_nome]["Valor"].sum()
+                    saldos_lista.append({"Conta": conta_nome, "Saldo Atual": saldo_inicial + movimentacao})
+                
+                df_resumo_saldos = pd.DataFrame(saldos_lista)
+                st.table(df_resumo_saldos.assign(Saldo_Atual=df_resumo_saldos["Saldo Atual"].apply(formatar_moeda_br))[["Conta", "Saldo_Atual"]])
+            
+            with c2:
+                total_patrimonio = sum([x["Saldo Atual"] for x in saldos_lista])
+                st.metric("Patrimônio Líquido", formatar_moeda_br(total_patrimonio))
+        else:
+            st.warning("Cadastre suas contas bancárias para ver os saldos.")
+
+    # ---------------------------------------------------------
+    # MENU: RELATÓRIO MENSAL (DRE HIERÁRQUICO)
+    # ---------------------------------------------------------
+    elif menu == "Relatório Mensal":
+        st.title("📊 Realizado Mensal (Estrutura Hierárquica)")
+        if not df_lancamentos.empty and not df_categorias.empty:
+            df_lancamentos["Mes_Ano"] = pd.to_datetime(df_lancamentos["Data"], dayfirst=True).dt.strftime('%m/%Y')
+            
+            map_codigos = dict(zip(df_categorias["Nome_Categoria"], df_categorias["Codigo"]))
+            df_lancamentos["Codigo"] = df_lancamentos["Categoria_ID"].map(map_codigos).astype(str)
+            
+            df_pivot_ana = df_lancamentos.pivot_table(
+                index="Codigo", columns="Mes_Ano", values="Valor", aggfunc="sum", fill_value=0
+            )
+            
+            colunas_meses = sorted(df_pivot_ana.columns.tolist())
+            relatorio_final = []
+            
+            df_cats_ord = df_categorias.sort_values(by="Codigo")
+            
+            for _, cat in df_cats_ord.iterrows():
+                codigo_pai = str(cat["Codigo"])
+                nome_cat = cat["Nome_Categoria"]
+                nivel = identificar_nivel(codigo_pai)
+                
+                linha_dre = {"Código": codigo_pai, "Descrição": ("  " * (nivel - 1)) + nome_cat}
+                
+                for mes in colunas_meses:
+                    mask = df_pivot_ana.index.astype(str).str.startswith(codigo_pai)
+                    valor_total = df_pivot_ana[mask][mes].sum()
+                    linha_dre[mes] = valor_total
+                
+                relatorio_final.append(linha_dre)
+            
+            df_dre = pd.DataFrame(relatorio_final)
+            st.dataframe(df_dre.style.format({m: formatar_moeda_br for m in colunas_meses}), use_container_width=True)
+        else:
+            st.info("Dados insuficientes para gerar o DRE.")
+
+    # ---------------------------------------------------------
+    # MENU: CADASTROS
+    # ---------------------------------------------------------
+    elif menu == "Cadastros":
+        st.title("⚙️ Gestão de Cadastros")
+        tab1, tab2, tab3 = st.tabs(["Contas Bancárias", "Plano de Contas", "Centros de Custo"])
+        
+        with tab1:
+            st.subheader("Nova Conta")
+            with st.form("form_add_conta"):
+                f_n = st.text_input("Nome da Conta")
+                f_b = st.text_input("Banco")
+                f_s = st.number_input("Saldo Inicial", format="%.2f")
+                if st.form_submit_button("Salvar Conta"):
+                    gc = conectar_planilha()
+                    sh = gc.open_by_key(ID_DA_PLANILHA)
+                    ws_c = sh.worksheet(NOME_ABA_CONTAS)
+                    ws_c.append_row([len(df_contas)+1, f_n, f_b, f_s])
+                    st.cache_data.clear()
+                    st.success("Conta salva!")
+                    st.rerun()
+            st.dataframe(df_contas)
+
+        with tab2:
+            st.subheader("Estrutura de Categorias")
+            st.write("Hierarquia por pontos: 3 (Nível 1) -> 3.01 (Nível 2) -> 3.01.01 (Nível 3) -> 3.01.01.001 (Analítico)")
+            with st.form("form_add_cat"):
+                f_c = st.text_input("Código (ex: 3.01.01.001)")
+                f_n = st.text_input("Nome da Categoria")
+                f_t = st.selectbox("Tipo", ["Receita", "Despesa"])
+                permite = st.checkbox("Esta categoria aceita lançamentos diretos? (Analítica)", value=True)
+                
+                if st.form_submit_button("Salvar Categoria"):
+                    txt_permite = "SIM" if permite else "NÃO"
+                    gc = conectar_planilha()
+                    sh = gc.open_by_key(ID_DA_PLANILHA)
+                    ws_cat = sh.worksheet(NOME_ABA_CATEGORIAS)
+                    ws_cat.append_row([str(f_c), f_n, f_t, txt_permite])
+                    st.cache_data.clear()
+                    st.success("Categoria salva!")
+                    st.rerun()
+            
             if not df_categorias.empty and "Codigo" in df_categorias.columns:
                 df_categorias["Codigo"] = df_categorias["Codigo"].astype(str)
+                st.dataframe(df_categorias.sort_values(by="Codigo"))
 
-            # FILTRO: Apenas categorias analíticas que permitem lançamento
-            if not df_categorias.empty and "Permite_Lancamento" in df_categorias.columns:
-                df_categorias_analiticas = df_categorias[df_categorias["Permite_Lancamento"].astype(str).str.upper() == "SIM"].copy()
-            else:
-                df_categorias_analiticas = df_categorias.copy()
-
-            st.sidebar.title("Navegação")
-            menu = st.sidebar.radio(
-                "Ir para:",
-                ["Resumo", "Relatório Mensal", "Importar Extrato", "Conciliação Bancária", "Lançamentos Conciliados", "Cadastros"]
-            )
-
-            # ---------------------------------------------------------
-            # MENU: IMPORTAR EXTRATO
-            # ---------------------------------------------------------
-            if menu == "Importar Extrato":
-                st.title("📥 Importação de Extratos (.OFX)")
-                uploaded_file = st.file_uploader("Upload do arquivo bancário", type=["ofx"])
-
-                if uploaded_file:
-                    df_import = processar_ofx(uploaded_file)
-
-                    if not df_import.empty:
-                        st.subheader("Transações Detectadas")
-                        
-                        conta_sel = st.selectbox(
-                            "Vincular à Conta Bancária:", 
-                            df_contas["Nome_Conta"].tolist() if not df_contas.empty and "Nome_Conta" in df_contas.columns else ["Nenhuma conta cadastrada"]
-                        )
-                        
-                        df_import["Conta_ID"] = conta_sel
-
-                        col_exib = ["Data", "Descricao", "Valor", "Tipo"]
-                        st.dataframe(df_import[col_exib], use_container_width=True)
-
-                        c1, c2 = st.columns(2)
-                        with c1:
-                            st.metric("Total de Lançamentos", len(df_import))
-                        with c2:
-                            total_import = df_import["Valor"].sum()
-                            st.metric("Soma do Extrato", formatar_moeda_br(total_import))
-
-                        if st.button("🚀 Confirmar Gravação"):
-                            if conta_sel == "Nenhuma conta cadastrada":
-                                st.error("Cadastre uma conta antes de importar.")
-                            else:
-                                gravar_transacoes_na_planilha(df_import)
-                                st.rerun()
-
-            # ---------------------------------------------------------
-            # MENU: CONCILIAÇÃO BANCÁRIA (PENDÊNCIAS)
-            # ---------------------------------------------------------
-            elif menu == "Conciliação Bancária":
-                st.title("🤝 Conciliação de Pendências")
-                st.info("Utilize os seletores e clique em 'Confirmar' linha por linha para conciliar.")
-
-                if not df_lancamentos.empty:
-                    # Filtra apenas o que não tem status CONCILIADO
-                    if "Status" in df_lancamentos.columns:
-                        mask = (df_lancamentos["Status"].astype(str).str.upper() != "CONCILIADO")
-                    else:
-                        mask = (df_lancamentos["Categoria_ID"] == "") | (df_lancamentos["Centro_Custo_ID"] == "")
-                    
-                    df_pendente = df_lancamentos[mask].copy()
-
-                    if df_pendente.empty:
-                        st.success("🎉 Não existem lançamentos pendentes!")
-                    else:
-                        st.write(f"Lançamentos para tratar: {len(df_pendente)}")
-                        
-                        l_cats = [""] + df_categorias_analiticas["Nome_Categoria"].tolist() if not df_categorias_analiticas.empty else [""]
-                        
-                        if not df_centros.empty:
-                            col_nome_cen = "Centros_Custos" if "Centros_Custos" in df_centros.columns else "Nome_Centro"
-                            l_cens = [""] + df_centros[col_nome_cen].tolist() if col_nome_cen in df_centros.columns else [""]
-                        else:
-                            l_cens = [""]
-
-                        # Exibição linha por linha com botão de confirmação individual
-                        for idx, row in df_pendente.iterrows():
-                            linha_index = idx + 2
-                            
-                            with st.container():
-                                c = st.columns([1, 2.5, 1, 1.5, 1.5, 0.8])
-                                c[0].text(row["Data"])
-                                c[1].text(row["Descricao"])
-                                # Exibe o valor formatado corretamente
-                                c[2].text(formatar_moeda_br(row["Valor"]))
-                                
-                                sel_cat = c[3].selectbox(f"Categoria", l_cats, key=f"cat_p_{idx}")
-                                sel_cen = c[4].selectbox(f"Centro Custo", l_cens, key=f"cen_p_{idx}")
-                                
-                                if c[5].button("✅ Confirmar", key=f"btn_p_{idx}"):
-                                    if sel_cat == "" or sel_cen == "":
-                                        st.error("Selecione Categoria e Centro de Custo.")
-                                    else:
-                                        ws_l = sh.worksheet(NOME_ABA_LANCAMENTOS)
-                                        ws_l.update_cell(linha_index, 4, sel_cat)
-                                        ws_l.update_cell(linha_index, 5, sel_cen)
-                                        ws_l.update_cell(linha_index, 8, "CONCILIADO")
-                                        st.success(f"Linha {linha_index} conciliada!")
-                                        st.rerun()
-                                st.divider()
-
-            # ---------------------------------------------------------
-            # MENU: LANÇAMENTOS CONCILIADOS (CORREÇÃO)
-            # ---------------------------------------------------------
-            elif menu == "Lançamentos Conciliados":
-                st.title("✅ Lançamentos Conciliados")
-                st.info("Revise o que já foi confirmado. Se alterar aqui, o lançamento continuará nesta aba.")
-
-                if not df_lancamentos.empty:
-                    if "Status" in df_lancamentos.columns:
-                        mask_conciliado = (df_lancamentos["Status"].astype(str).str.upper() == "CONCILIADO")
-                    else:
-                        mask_conciliado = (df_lancamentos["Categoria_ID"] != "") & (df_lancamentos["Centro_Custo_ID"] != "")
-                        
-                    df_conciliado = df_lancamentos[mask_conciliado].copy()
-
-                    if df_conciliado.empty:
-                        st.info("Nenhum lançamento conciliado encontrado.")
-                    else:
-                        l_cats = [""] + df_categorias_analiticas["Nome_Categoria"].tolist() if not df_categorias_analiticas.empty else [""]
-                        if not df_centros.empty:
-                            col_nome_cen = "Centros_Custos" if "Centros_Custos" in df_centros.columns else "Nome_Centro"
-                            l_cens = [""] + df_centros[col_nome_cen].tolist() if col_nome_cen in df_centros.columns else [""]
-                        else:
-                            l_cens = [""]
-
-                        for idx, row in df_conciliado.iterrows():
-                            linha_index = idx + 2
-                            with st.container():
-                                c = st.columns([1, 2.5, 1, 1.5, 1.5, 0.8])
-                                c[0].text(row["Data"])
-                                c[1].text(row["Descricao"])
-                                c[2].text(formatar_moeda_br(row["Valor"]))
-                                
-                                val_cat_atual = row["Categoria_ID"]
-                                val_cen_atual = row["Centro_Custo_ID"]
-                                
-                                idx_cat = l_cats.index(val_cat_atual) if val_cat_atual in l_cats else 0
-                                idx_cen = l_cens.index(val_cen_atual) if val_cen_atual in l_cens else 0
-
-                                sel_cat = c[3].selectbox(f"Categoria", l_cats, index=idx_cat, key=f"cat_c_{idx}")
-                                sel_cen = c[4].selectbox(f"Centro Custo", l_cens, index=idx_cen, key=f"cen_c_{idx}")
-                                
-                                if c[5].button("💾 Salvar", key=f"btn_c_{idx}"):
-                                    ws_l = sh.worksheet(NOME_ABA_LANCAMENTOS)
-                                    ws_l.update_cell(linha_index, 4, sel_cat)
-                                    ws_l.update_cell(linha_index, 5, sel_cen)
-                                    st.success(f"Atualizado!")
-                                    st.rerun()
-                                st.divider()
-
-            # ---------------------------------------------------------
-            # MENU: RESUMO
-            # ---------------------------------------------------------
-            elif menu == "Resumo":
-                st.title("📊 Resumo Financeiro")
-                if not df_contas.empty and "Nome_Conta" in df_contas.columns:
-                    c1, c2 = st.columns(2)
-                    with c1:
-                        st.subheader("Saldos por Conta")
-                        saldos_lista = []
-                        for _, row in df_contas.iterrows():
-                            conta_nome = row["Nome_Conta"]
-                            saldo_inicial = row["Saldo_Inicial"] 
-                            movimentacao = df_lancamentos[df_lancamentos["Conta_ID"] == conta_nome]["Valor"].sum()
-                            saldos_lista.append({"Conta": conta_nome, "Saldo Atual": saldo_inicial + movimentacao})
-                        
-                        df_resumo_saldos = pd.DataFrame(saldos_lista)
-                        st.table(df_resumo_saldos.assign(Saldo_Atual=df_resumo_saldos["Saldo Atual"].apply(formatar_moeda_br))[["Conta", "Saldo_Atual"]])
-                    
-                    with c2:
-                        total_patrimonio = sum([x["Saldo Atual"] for x in saldos_lista])
-                        st.metric("Patrimônio Líquido", formatar_moeda_br(total_patrimonio))
-                else:
-                    st.warning("Cadastre suas contas bancárias para ver os saldos.")
-
-            # ---------------------------------------------------------
-            # MENU: RELATÓRIO MENSAL (DRE HIERÁRQUICO)
-            # ---------------------------------------------------------
-            elif menu == "Relatório Mensal":
-                st.title("📊 Realizado Mensal (Estrutura Hierárquica)")
-                if not df_lancamentos.empty and not df_categorias.empty:
-                    df_lancamentos["Mes_Ano"] = pd.to_datetime(df_lancamentos["Data"], dayfirst=True).dt.strftime('%m/%Y')
-                    
-                    map_codigos = dict(zip(df_categorias["Nome_Categoria"], df_categorias["Codigo"]))
-                    df_lancamentos["Codigo"] = df_lancamentos["Categoria_ID"].map(map_codigos).astype(str)
-                    
-                    df_pivot_ana = df_lancamentos.pivot_table(
-                        index="Codigo", columns="Mes_Ano", values="Valor", aggfunc="sum", fill_value=0
-                    )
-                    
-                    colunas_meses = sorted(df_pivot_ana.columns.tolist())
-                    relatorio_final = []
-                    
-                    df_cats_ord = df_categorias.sort_values(by="Codigo")
-                    
-                    for _, cat in df_cats_ord.iterrows():
-                        codigo_pai = str(cat["Codigo"])
-                        nome_cat = cat["Nome_Categoria"]
-                        nivel = identificar_nivel(codigo_pai)
-                        
-                        linha_dre = {"Código": codigo_pai, "Descrição": ("  " * (nivel - 1)) + nome_cat}
-                        
-                        for mes in colunas_meses:
-                            mask = df_pivot_ana.index.astype(str).str.startswith(codigo_pai)
-                            valor_total = df_pivot_ana[mask][mes].sum()
-                            linha_dre[mes] = valor_total
-                        
-                        relatorio_final.append(linha_dre)
-                    
-                    df_dre = pd.DataFrame(relatorio_final)
-                    st.dataframe(df_dre.style.format({m: formatar_moeda_br for m in colunas_meses}), use_container_width=True)
-                else:
-                    st.info("Dados insuficientes para gerar o DRE.")
-
-            # ---------------------------------------------------------
-            # MENU: CADASTROS
-            # ---------------------------------------------------------
-            elif menu == "Cadastros":
-                st.title("⚙️ Gestão de Cadastros")
-                tab1, tab2, tab3 = st.tabs(["Contas Bancárias", "Plano de Contas", "Centros de Custo"])
-                
-                with tab1:
-                    st.subheader("Nova Conta")
-                    with st.form("form_add_conta"):
-                        f_n = st.text_input("Nome da Conta")
-                        f_b = st.text_input("Banco")
-                        f_s = st.number_input("Saldo Inicial", format="%.2f")
-                        if st.form_submit_button("Salvar Conta"):
-                            obter_aba(sh, NOME_ABA_CONTAS, CABECALHO_CONTAS).append_row([len(df_contas)+1, f_n, f_b, f_s])
-                            st.success("Conta salva!")
-                            st.rerun()
-                    st.dataframe(df_contas)
-
-                with tab2:
-                    st.subheader("Estrutura de Categorias")
-                    st.write("Hierarquia por pontos: 3 (Nível 1) -> 3.01 (Nível 2) -> 3.01.01 (Nível 3) -> 3.01.01.001 (Analítico)")
-                    with st.form("form_add_cat"):
-                        f_c = st.text_input("Código (ex: 3.01.01.001)")
-                        f_n = st.text_input("Nome da Categoria")
-                        f_t = st.selectbox("Tipo", ["Receita", "Despesa"])
-                        permite = st.checkbox("Esta categoria aceita lançamentos diretos? (Analítica)", value=True)
-                        
-                        if st.form_submit_button("Salvar Categoria"):
-                            txt_permite = "SIM" if permite else "NÃO"
-                            obter_aba(sh, NOME_ABA_CATEGORIAS, CABECALHO_CATEGORIAS).append_row([str(f_c), f_n, f_t, txt_permite])
-                            st.success("Categoria salva!")
-                            st.rerun()
-                    
-                    if not df_categorias.empty and "Codigo" in df_categorias.columns:
-                        df_categorias["Codigo"] = df_categorias["Codigo"].astype(str)
-                        st.dataframe(df_categorias.sort_values(by="Codigo"))
-
-                with tab3:
-                    st.subheader("Novos Centros de Custo")
-                    with st.form("form_add_cen"):
-                        f_n = st.text_input("Nome")
-                        if st.form_submit_button("Salvar"):
-                            obter_aba(sh, NOME_ABA_CENTROS, CABECALHO_CENTROS).append_row([len(df_centros)+1, f_n])
-                            st.success("Centro salvo!")
-                            st.rerun()
-                    st.dataframe(df_centros)
-
-        except gspread.exceptions.APIError as e:
-            st.error("❌ Erro de Autenticação/Permissão com o Google Sheets.")
-            st.info("Certifique-se de que a planilha está compartilhada com o e-mail da sua Service Account.")
-            st.write(f"Detalhes técnicos: {e}")
+        with tab3:
+            st.subheader("Novos Centros de Custo")
+            with st.form("form_add_cen"):
+                f_n = st.text_input("Nome")
+                if st.form_submit_button("Salvar"):
+                    gc = conectar_planilha()
+                    sh = gc.open_by_key(ID_DA_PLANILHA)
+                    ws_cen = sh.worksheet(NOME_ABA_CENTROS)
+                    ws_cen.append_row([len(df_centros)+1, f_n])
+                    st.cache_data.clear()
+                    st.success("Centro salvo!")
+                    st.rerun()
+            st.dataframe(df_centros)
