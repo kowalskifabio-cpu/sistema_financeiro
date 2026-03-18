@@ -601,14 +601,17 @@ if check_password():
         
         if not df_lancamentos.empty and not df_categorias.empty:
             
-            # --- FILTROS NO TOPO DO RELATÓRIO ---
+            # --- FILTROS NO TOPO DO RELATÓRIO (REORGANIZADO) ---
             col_f1, col_f2, col_f3 = st.columns([1.5, 2, 1])
             with col_f1:
                 centro_filtro = st.selectbox("Filtrar por Centro de Custo:", ["Todos"] + l_cens_seletor)
+            
             with col_f2:
-                # Opções de níveis baseadas no que existe na planilha
+                # Busca níveis e garante tratamento como INT para comparação precisa
+                df_categorias["Nivel"] = pd.to_numeric(df_categorias["Nivel"], errors='coerce').fillna(4).astype(int)
                 niveis_disponiveis = sorted(df_categorias["Nivel"].unique().tolist())
                 niveis_selecionados = st.multiselect("Filtrar por Níveis:", niveis_disponiveis, default=niveis_disponiveis)
+            
             with col_f3:
                 ocultar_zerados = st.checkbox("Ocultar lançamentos zerados", value=False)
             
@@ -639,20 +642,13 @@ if check_password():
             # Ordena as categorias pelo código para processamento hierárquico
             df_cats_ord = df_categorias.sort_values(by="Codigo")
             
-            # Garante que a coluna Nível existe e é numérica
-            if "Nivel" in df_cats_ord.columns:
-                df_cats_ord["Nivel"] = pd.to_numeric(df_cats_ord["Nivel"], errors='coerce').fillna(4).astype(int)
-            else:
-                st.error("A aba Categorias precisa ter a coluna 'Nivel' (1 a 4).")
-                st.stop()
-            
             # Processa cada categoria hierarquicamente
             for _, cat in df_cats_ord.iterrows():
                 codigo_pai = str(cat["Codigo"])
                 nome_cat = cat["Nome_Categoria"]
                 nivel = int(cat["Nivel"])
                 
-                # --- APLICA FILTRO DE NÍVEL ---
+                # --- APLICA FILTRO DE NÍVEL (CORREÇÃO DE COMPARATIVO) ---
                 if nivel not in niveis_selecionados:
                     continue
 
