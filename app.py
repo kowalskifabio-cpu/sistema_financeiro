@@ -420,7 +420,7 @@ if check_password():
                         
                         l_cats = [""] + df_categorias_analiticas["Nome_Categoria"].tolist() if not df_categorias_analiticas.empty else [""]
                         
-                        # CORREÇÃO PARA GARANTIR CARREGAMENTO DOS CENTROS
+                        # CORREÇÃO DEFINITIVA PARA GARANTIR CARREGAMENTO DOS CENTROS
                         if not df_centros.empty and "Nome_Centro" in df_centros.columns:
                             l_cens = [""] + df_centros["Nome_Centro"].tolist()
                         else:
@@ -428,7 +428,7 @@ if check_password():
 
                         # Exibição linha por linha com botão de confirmação individual
                         for idx, row in df_pendente.iterrows():
-                            # Ajuste da linha na planilha (get_all_records ignora cabeçalho e começa em 0, logo idx + 2)
+                            # Ajuste da linha na planilha (idx + 2)
                             linha_index = idx + 2
                             
                             with st.container():
@@ -438,6 +438,7 @@ if check_password():
                                 c[2].text(formatar_moeda_br(row["Valor"]))
                                 
                                 sel_cat = c[3].selectbox(f"Categoria", l_cats, key=f"cat_p_{idx}")
+                                # Otimização: Forçar l_cens no selectbox
                                 sel_cen = c[4].selectbox(f"Centro Custo", l_cens, key=f"cen_p_{idx}")
                                 
                                 if c[5].button("✅ Confirmar", key=f"btn_p_{idx}"):
