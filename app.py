@@ -34,7 +34,8 @@ CABECALHO_LANCAMENTOS = [
 CABECALHO_CONTAS = ["ID", "Nome_Conta", "Banco", "Saldo_Inicial"]
 # Suporta a estrutura hierárquica por pontos (ex: 3.01.01.001)
 CABECALHO_CATEGORIAS = ["Codigo", "Nome_Categoria", "Tipo", "Permite_Lancamento"]
-CABECALHO_CENTROS = ["ID", "Nome_Centro"]
+# AJUSTADO PARA O PADRÃO DA SUA PLANILHA (image_7b4dbe.png)
+CABECALHO_CENTROS = ["ID", "Centros_Custos"]
 
 # =========================================================
 # FUNÇÕES DE FORMATAÇÃO E ESTRUTURA HIERÁRQUICA
@@ -420,15 +421,19 @@ if check_password():
                         
                         l_cats = [""] + df_categorias_analiticas["Nome_Categoria"].tolist() if not df_categorias_analiticas.empty else [""]
                         
-                        # CORREÇÃO DEFINITIVA PARA GARANTIR CARREGAMENTO DOS CENTROS
-                        if not df_centros.empty and "Nome_Centro" in df_centros.columns:
-                            l_cens = [""] + df_centros["Nome_Centro"].tolist()
+                        # CORREÇÃO PARA GARANTIR CARREGAMENTO DOS CENTROS CONFORME SUA PLANILHA
+                        if not df_centros.empty:
+                            # Tenta Centros_Custos (conforme imagem) ou Nome_Centro
+                            col_nome_cen = "Centros_Custos" if "Centros_Custos" in df_centros.columns else "Nome_Centro"
+                            if col_nome_cen in df_centros.columns:
+                                l_cens = [""] + df_centros[col_nome_cen].tolist()
+                            else:
+                                l_cens = [""]
                         else:
                             l_cens = [""]
 
                         # Exibição linha por linha com botão de confirmação individual
                         for idx, row in df_pendente.iterrows():
-                            # Ajuste da linha na planilha (idx + 2)
                             linha_index = idx + 2
                             
                             with st.container():
@@ -438,7 +443,6 @@ if check_password():
                                 c[2].text(formatar_moeda_br(row["Valor"]))
                                 
                                 sel_cat = c[3].selectbox(f"Categoria", l_cats, key=f"cat_p_{idx}")
-                                # Otimização: Forçar l_cens no selectbox
                                 sel_cen = c[4].selectbox(f"Centro Custo", l_cens, key=f"cen_p_{idx}")
                                 
                                 if c[5].button("✅ Confirmar", key=f"btn_p_{idx}"):
@@ -446,7 +450,6 @@ if check_password():
                                         st.error("Selecione Categoria e Centro de Custo.")
                                     else:
                                         ws_l = sh.worksheet(NOME_ABA_LANCAMENTOS)
-                                        # Coluna 4: Categoria, Coluna 5: Centro, Coluna 8: Status
                                         ws_l.update_cell(linha_index, 4, sel_cat)
                                         ws_l.update_cell(linha_index, 5, sel_cen)
                                         ws_l.update_cell(linha_index, 8, "CONCILIADO")
@@ -473,8 +476,9 @@ if check_password():
                         st.info("Nenhum lançamento conciliado encontrado.")
                     else:
                         l_cats = [""] + df_categorias_analiticas["Nome_Categoria"].tolist() if not df_categorias_analiticas.empty else [""]
-                        if not df_centros.empty and "Nome_Centro" in df_centros.columns:
-                            l_cens = [""] + df_centros["Nome_Centro"].tolist()
+                        if not df_centros.empty:
+                            col_nome_cen = "Centros_Custos" if "Centros_Custos" in df_centros.columns else "Nome_Centro"
+                            l_cens = [""] + df_centros[col_nome_cen].tolist() if col_nome_cen in df_centros.columns else [""]
                         else:
                             l_cens = [""]
 
