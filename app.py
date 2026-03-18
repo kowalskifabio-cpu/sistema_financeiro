@@ -53,7 +53,7 @@ def formatar_moeda_br(valor):
 # def identificar_nivel(codigo):
 #     """
 #     Identifica o nível contábil pela quantidade de blocos no código:
-#     3             -> Nível 1
+#     3            -> Nível 1
 #     3.01          -> Nível 2
 #     3.01.01       -> Nível 3
 #     3.01.01.001   -> Nível 4 (Analítico)
