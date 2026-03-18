@@ -13,7 +13,6 @@ st.set_page_config(page_title="Labor Business Pro", layout="wide")
 # =========================================================
 # CONFIGURAÇÕES GERAIS
 # =========================================================
-# Verifique se este ID é exatamente o que aparece na URL da sua planilha
 ID_DA_PLANILHA = "1FLCbuzrg1UL1yatdIas6aDBBjhc__mebdhUYxIt0NQk"
 NOME_ABA_LANCAMENTOS = "Lancamentos"
 NOME_ABA_CONTAS = "Contas"
@@ -32,8 +31,8 @@ CABECALHO_LANCAMENTOS = [
 ]
 
 CABECALHO_CONTAS = ["ID", "Nome_Conta", "Banco", "Saldo_Inicial"]
-# Suporta a estrutura hierárquica por pontos (ex: 3.01.01.001)
-CABECALHO_CATEGORIAS = ["Codigo", "Nome_Categoria", "Tipo"]
+# ADICIONADO: Coluna Permite_Lancamento para distinguir Sintética de Analítica
+CABECALHO_CATEGORIAS = ["Codigo", "Nome_Categoria", "Tipo", "Permite_Lancamento"]
 CABECALHO_CENTROS = ["ID", "Nome_Centro"]
 
 # =========================================================
@@ -335,7 +334,6 @@ if check_password():
     gc = conectar_planilha()
     if gc:
         try:
-            # Ponto onde o APIError costuma ocorrer se as permissões estiverem erradas
             sh = gc.open_by_key(ID_DA_PLANILHA)
             
             # Carregamento em tempo real dos cadastros
@@ -344,9 +342,15 @@ if check_password():
             df_centros = carregar_dados_aba(sh, NOME_ABA_CENTROS, CABECALHO_CENTROS)
             df_lancamentos = carregar_dados_aba(sh, NOME_ABA_LANCAMENTOS, CABECALHO_LANCAMENTOS)
 
-            # Forçar Codigo para String para evitar erros de ordenação (TypeError)
+            # Forçar Codigo para String para evitar erros de ordenação
             if not df_categorias.empty and "Codigo" in df_categorias.columns:
                 df_categorias["Codigo"] = df_categorias["Codigo"].astype(str)
+
+            # FILTRO: Apenas categorias analíticas que permitem lançamento
+            if not df_categorias.empty and "Permite_Lancamento" in df_categorias.columns:
+                df_categorias_analiticas = df_categorias[df_categorias["Permite_Lancamento"].astype(str).str.upper() == "SIM"].copy()
+            else:
+                df_categorias_analiticas = df_categorias.copy()
 
             st.sidebar.title("Navegação")
             menu = st.sidebar.radio(
@@ -396,7 +400,7 @@ if check_password():
             # ---------------------------------------------------------
             elif menu == "Conciliação Bancária":
                 st.title("🤝 Conciliação de Pendências")
-                st.info("Trate lançamentos que ainda não possuem Categoria ou Centro de Custo.")
+                st.info("Apenas categorias marcadas como 'Analíticas' (Permite Lançamento: SIM) são exibidas.")
 
                 if not df_lancamentos.empty:
                     mask = (df_lancamentos["Categoria_ID"] == "") | (df_lancamentos["Centro_Custo_ID"] == "")
@@ -407,7 +411,8 @@ if check_password():
                     else:
                         st.write(f"Pendentes: {len(df_pendente)}")
                         
-                        l_cats = [""] + df_categorias["Nome_Categoria"].tolist() if not df_categorias.empty else [""]
+                        # USANDO APENAS AS CATEGORIAS ANALÍTICAS NO SELETOR
+                        l_cats = [""] + df_categorias_analiticas["Nome_Categoria"].tolist() if not df_categorias_analiticas.empty else [""]
                         l_cens = [""] + df_centros["Nome_Centro"].tolist() if not df_centros.empty else [""]
 
                         with st.form("form_concilia"):
@@ -530,8 +535,12 @@ if check_password():
                         f_c = st.text_input("Código (ex: 3.01.01.001)")
                         f_n = st.text_input("Nome da Categoria")
                         f_t = st.selectbox("Tipo", ["Receita", "Despesa"])
+                        # NOVA FUNCIONALIDADE: Checkbox para definir se aceita lançamentos direto
+                        permite = st.checkbox("Esta categoria aceita lançamentos diretos? (Analítica)", value=True)
+                        
                         if st.form_submit_button("Salvar Categoria"):
-                            obter_aba(sh, NOME_ABA_CATEGORIAS, CABECALHO_CATEGORIAS).append_row([str(f_c), f_n, f_t])
+                            txt_permite = "SIM" if permite else "NÃO"
+                            obter_aba(sh, NOME_ABA_CATEGORIAS, CABECALHO_CATEGORIAS).append_row([str(f_c), f_n, f_t, txt_permite])
                             st.success("Categoria salva!")
                             st.rerun()
                     
