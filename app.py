@@ -598,10 +598,16 @@ if check_password():
     elif menu == "Relatório Mensal":
         st.title("📊 Realizado Mensal (Estrutura Hierárquica)")
         
-        # Filtro de Centro de Custo na barra lateral
-        centro_filtro = st.sidebar.selectbox("Filtrar por Centro de Custo:", ["Todos"] + l_cens_seletor)
-        
         if not df_lancamentos.empty and not df_categorias.empty:
+            
+            # --- FILTROS NO TOPO DO RELATÓRIO ---
+            col_f1, col_f2 = st.columns(2)
+            with col_f1:
+                centro_filtro = st.selectbox("Filtrar por Centro de Custo:", ["Todos"] + l_cens_seletor)
+            with col_f2:
+                # Opções de níveis baseadas no que existe na planilha
+                niveis_disponiveis = sorted(df_categorias["Nivel"].unique().tolist())
+                niveis_selecionados = st.multiselect("Filtrar por Níveis:", niveis_disponiveis, default=niveis_disponiveis)
             
             # Filtros Base: Ignorar transferências
             df_dre_input = df_lancamentos[df_lancamentos["Categoria_ID"] != "TRANSFERÊNCIA"].copy()
@@ -643,25 +649,28 @@ if check_password():
                 nome_cat = cat["Nome_Categoria"]
                 nivel = cat["Nivel"]
                 
+                # --- APLICA FILTRO DE NÍVEL ---
+                if nivel not in niveis_selecionados:
+                    continue
+
                 # Formatação da descrição com base no nível (indentação)
                 prefixo = "  " * (nivel - 1)
                 
-                linha_dre = {"Código": codigo_pai, "Descrição": prefixo + nome_cat, "Nível": nivel}
+                # REORGANIZADO: Nível antes do Código
+                linha_dre = {"Nível": nivel, "Código": codigo_pai, "Descrição": prefixo + nome_cat}
                 
                 # Soma os valores para cada mês considerando a hierarquia (começa com o código pai)
                 valores_linha = []
                 for mes in colunas_meses:
-                    # Filtra lançamentos cujo código começa com o código pai desta linha
                     mask = df_pivot_ana.index.astype(str).str.startswith(codigo_pai)
                     valor_total = df_pivot_ana[mask][mes].sum()
                     linha_dre[mes] = valor_total
                     valores_linha.append(valor_total)
                 
-                # Cálculos de Total e Média (solicitados)
+                # Cálculos de Total e Média
                 total_linha = sum(valores_linha)
                 linha_dre["Total Acumulado"] = total_linha
                 
-                # Média mensal: ignora meses com valor zero para não distorcer a média
                 valores_positivos = [v for v in valores_linha if v != 0]
                 media_linha = sum(valores_positivos) / len(valores_positivos) if valores_positivos else 0
                 linha_dre["Média Mensal"] = media_linha
@@ -671,22 +680,22 @@ if check_password():
             # Cria o DataFrame final do DRE
             df_dre = pd.DataFrame(relatorio_final)
             
+            if df_dre.empty:
+                st.warning("Nenhum dado a exibir para os níveis selecionados.")
+                st.stop()
+
             # Lista de colunas numéricas para formatação
             colunas_formato = colunas_meses + ["Total Acumulado", "Média Mensal"]
             
-            # LÓGICA DE ESTILIZAÇÃO POR NÍVEL (MELHORIA SOLICITADA)
+            # LÓGICA DE ESTILIZAÇÃO POR NÍVEL
             def aplicar_cores(row):
                 nivel = row["Nível"]
-                # Nível 1: Azul Marinho / Branco / Negrito
                 if nivel == 1:
                     return ['background-color: #002060; color: white; font-weight: bold'] * len(row)
-                # Nível 2: Azul Claro / Preto / Negrito
                 if nivel == 2:
                     return ['background-color: #BDD7EE; color: black; font-weight: bold'] * len(row)
-                # Nível 3: Cinza / Preto / Negrito
                 if nivel == 3:
                     return ['background-color: #D9D9D9; color: black; font-weight: bold'] * len(row)
-                # Nível 4: Branco / Preto / Normal
                 return ['background-color: white; color: black'] * len(row)
 
             # Aplica os estilos e a formatação de moeda
@@ -771,4 +780,4 @@ if check_password():
                         st.cache_data.clear() # Força recarregamento
                         st.success("Centro salvo!")
                         st.rerun()
-            st.dataframe(df_centros)
+            st.dataframe(df_centros))
