@@ -780,4 +780,4 @@ if check_password():
                         st.cache_data.clear() # Força recarregamento
                         st.success("Centro salvo!")
                         st.rerun()
-            st.dataframe(df_centros))
+            st.dataframe(df_centros)
