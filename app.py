@@ -13,6 +13,7 @@ st.set_page_config(page_title="Labor Business Pro", layout="wide")
 # =========================================================
 # CONFIGURAÇÕES GERAIS
 # =========================================================
+# Verifique se este ID é exatamente o que aparece na URL da sua planilha
 ID_DA_PLANILHA = "1FLCbuzrg1UL1yatdIas6aDBBjhc__mebdhUYxIt0NQk"
 NOME_ABA_LANCAMENTOS = "Lancamentos"
 NOME_ABA_CONTAS = "Contas"
@@ -55,7 +56,7 @@ def identificar_nivel(codigo):
     3.01.01.001   -> Nível 4 (Analítico)
     """
     cod_str = str(codigo).strip()
-    if not cod_str or cod_str == "None":
+    if not cod_str or cod_str == "None" or cod_str == "nan":
         return 0
     return len(cod_str.split('.'))
 
@@ -333,213 +334,224 @@ def gravar_transacoes_na_planilha(df_import):
 if check_password():
     gc = conectar_planilha()
     if gc:
-        sh = gc.open_by_key(ID_DA_PLANILHA)
-        
-        # Carregamento em tempo real dos cadastros
-        df_contas = carregar_dados_aba(sh, NOME_ABA_CONTAS, CABECALHO_CONTAS)
-        df_categorias = carregar_dados_aba(sh, NOME_ABA_CATEGORIAS, CABECALHO_CATEGORIAS)
-        df_centros = carregar_dados_aba(sh, NOME_ABA_CENTROS, CABECALHO_CENTROS)
-        df_lancamentos = carregar_dados_aba(sh, NOME_ABA_LANCAMENTOS, CABECALHO_LANCAMENTOS)
+        try:
+            # Ponto onde o APIError costuma ocorrer se as permissões estiverem erradas
+            sh = gc.open_by_key(ID_DA_PLANILHA)
+            
+            # Carregamento em tempo real dos cadastros
+            df_contas = carregar_dados_aba(sh, NOME_ABA_CONTAS, CABECALHO_CONTAS)
+            df_categorias = carregar_dados_aba(sh, NOME_ABA_CATEGORIAS, CABECALHO_CATEGORIAS)
+            df_centros = carregar_dados_aba(sh, NOME_ABA_CENTROS, CABECALHO_CENTROS)
+            df_lancamentos = carregar_dados_aba(sh, NOME_ABA_LANCAMENTOS, CABECALHO_LANCAMENTOS)
 
-        # CORREÇÃO CRUCIAL: Forçar a coluna Codigo para String (Texto) para evitar o erro de ordenação
-        if not df_categorias.empty and "Codigo" in df_categorias.columns:
-            df_categorias["Codigo"] = df_categorias["Codigo"].astype(str)
+            # Forçar Codigo para String para evitar erros de ordenação (TypeError)
+            if not df_categorias.empty and "Codigo" in df_categorias.columns:
+                df_categorias["Codigo"] = df_categorias["Codigo"].astype(str)
 
-        st.sidebar.title("Navegação")
-        menu = st.sidebar.radio(
-            "Ir para:",
-            ["Resumo", "Relatório Mensal", "Importar Extrato", "Conciliação Bancária", "Cadastros"]
-        )
+            st.sidebar.title("Navegação")
+            menu = st.sidebar.radio(
+                "Ir para:",
+                ["Resumo", "Relatório Mensal", "Importar Extrato", "Conciliação Bancária", "Cadastros"]
+            )
 
-        # ---------------------------------------------------------
-        # MENU: IMPORTAR EXTRATO
-        # ---------------------------------------------------------
-        if menu == "Importar Extrato":
-            st.title("📥 Importação de Extratos (.OFX)")
-            uploaded_file = st.file_uploader("Upload do arquivo bancário", type=["ofx"])
+            # ---------------------------------------------------------
+            # MENU: IMPORTAR EXTRATO
+            # ---------------------------------------------------------
+            if menu == "Importar Extrato":
+                st.title("📥 Importação de Extratos (.OFX)")
+                uploaded_file = st.file_uploader("Upload do arquivo bancário", type=["ofx"])
 
-            if uploaded_file:
-                df_import = processar_ofx(uploaded_file)
+                if uploaded_file:
+                    df_import = processar_ofx(uploaded_file)
 
-                if not df_import.empty:
-                    st.subheader("Transações Detectadas")
-                    
-                    conta_sel = st.selectbox(
-                        "Vincular à Conta Bancária:", 
-                        df_contas["Nome_Conta"].tolist() if not df_contas.empty else ["Nenhuma conta cadastrada"]
-                    )
-                    
-                    df_import["Conta_ID"] = conta_sel
+                    if not df_import.empty:
+                        st.subheader("Transações Detectadas")
+                        
+                        conta_sel = st.selectbox(
+                            "Vincular à Conta Bancária:", 
+                            df_contas["Nome_Conta"].tolist() if not df_contas.empty else ["Nenhuma conta cadastrada"]
+                        )
+                        
+                        df_import["Conta_ID"] = conta_sel
 
-                    col_exib = ["Data", "Descricao", "Valor", "Tipo"]
-                    st.dataframe(df_import[col_exib], use_container_width=True)
+                        col_exib = ["Data", "Descricao", "Valor", "Tipo"]
+                        st.dataframe(df_import[col_exib], use_container_width=True)
 
+                        c1, c2 = st.columns(2)
+                        with c1:
+                            st.metric("Total de Lançamentos", len(df_import))
+                        with c2:
+                            total_import = df_import["Valor"].sum()
+                            st.metric("Soma do Extrato", formatar_moeda_br(total_import))
+
+                        if st.button("🚀 Confirmar Gravação"):
+                            if conta_sel == "Nenhuma conta cadastrada":
+                                st.error("Cadastre uma conta antes de importar.")
+                            else:
+                                gravar_transacoes_na_planilha(df_import)
+                                st.rerun()
+
+            # ---------------------------------------------------------
+            # MENU: CONCILIAÇÃO BANCÁRIA
+            # ---------------------------------------------------------
+            elif menu == "Conciliação Bancária":
+                st.title("🤝 Conciliação de Pendências")
+                st.info("Trate lançamentos que ainda não possuem Categoria ou Centro de Custo.")
+
+                if not df_lancamentos.empty:
+                    mask = (df_lancamentos["Categoria_ID"] == "") | (df_lancamentos["Centro_Custo_ID"] == "")
+                    df_pendente = df_lancamentos[mask].copy()
+
+                    if df_pendente.empty:
+                        st.success("🎉 Não existem lançamentos pendentes!")
+                    else:
+                        st.write(f"Pendentes: {len(df_pendente)}")
+                        
+                        l_cats = [""] + df_categorias["Nome_Categoria"].tolist() if not df_categorias.empty else [""]
+                        l_cens = [""] + df_centros["Nome_Centro"].tolist() if not df_centros.empty else [""]
+
+                        with st.form("form_concilia"):
+                            atualizados = []
+                            for idx, row in df_pendente.iterrows():
+                                cols = st.columns([1, 2.5, 1, 1.5, 1.5])
+                                cols[0].text(row["Data"])
+                                cols[1].text(row["Descricao"])
+                                cols[2].text(formatar_moeda_br(row["Valor"]))
+                                
+                                sel_cat = cols[3].selectbox(f"Categoria", l_cats, key=f"cat_{idx}")
+                                sel_cen = cols[4].selectbox(f"Centro Custo", l_cens, key=f"cen_{idx}")
+                                
+                                if sel_cat != "" or sel_cen != "":
+                                    atualizados.append({
+                                        "linha": idx + 2,
+                                        "categoria": sel_cat if sel_cat != "" else row["Categoria_ID"],
+                                        "centro": sel_cen if sel_cen != "" else row["Centro_Custo_ID"]
+                                    })
+                                st.divider()
+
+                            if st.form_submit_button("💾 Salvar Conciliações"):
+                                ws_lanc = obter_aba(sh, NOME_ABA_LANCAMENTOS, CABECALHO_LANCAMENTOS)
+                                for acao in atualizados:
+                                    ws_lanc.update_cell(acao["linha"], 4, acao["categoria"])
+                                    ws_lanc.update_cell(acao["linha"], 5, acao["centro"])
+                                st.success("Conciliação salva com sucesso!")
+                                st.rerun()
+
+            # ---------------------------------------------------------
+            # MENU: RESUMO
+            # ---------------------------------------------------------
+            elif menu == "Resumo":
+                st.title("📊 Resumo Financeiro")
+                if not df_contas.empty:
                     c1, c2 = st.columns(2)
                     with c1:
-                        st.metric("Total de Lançamentos", len(df_import))
+                        st.subheader("Saldos por Conta")
+                        saldos_lista = []
+                        for _, row in df_contas.iterrows():
+                            conta_nome = row["Nome_Conta"]
+                            saldo_inicial = para_float(row["Saldo_Inicial"])
+                            movimentacao = para_float(df_lancamentos[df_lancamentos["Conta_ID"] == conta_nome]["Valor"].sum())
+                            saldos_lista.append({"Conta": conta_nome, "Saldo Atual": saldo_inicial + movimentacao})
+                        
+                        df_resumo_saldos = pd.DataFrame(saldos_lista)
+                        st.table(df_resumo_saldos.assign(Saldo_Atual=df_resumo_saldos["Saldo Atual"].apply(formatar_moeda_br))[["Conta", "Saldo_Atual"]])
+                    
                     with c2:
-                        total_import = df_import["Valor"].sum()
-                        st.metric("Soma do Extrato", formatar_moeda_br(total_import))
-
-                    if st.button("🚀 Confirmar Gravação"):
-                        if conta_sel == "Nenhuma conta cadastrada":
-                            st.error("Cadastre uma conta antes de importar.")
-                        else:
-                            gravar_transacoes_na_planilha(df_import)
-                            st.rerun()
-
-        # ---------------------------------------------------------
-        # MENU: CONCILIAÇÃO BANCÁRIA
-        # ---------------------------------------------------------
-        elif menu == "Conciliação Bancária":
-            st.title("🤝 Conciliação de Pendências")
-            st.info("Trate lançamentos que ainda não possuem Categoria ou Centro de Custo.")
-
-            if not df_lancamentos.empty:
-                mask = (df_lancamentos["Categoria_ID"] == "") | (df_lancamentos["Centro_Custo_ID"] == "")
-                df_pendente = df_lancamentos[mask].copy()
-
-                if df_pendente.empty:
-                    st.success("🎉 Não existem lançamentos pendentes!")
+                        total_patrimonio = sum([x["Saldo Atual"] for x in saldos_lista])
+                        st.metric("Patrimônio Líquido", formatar_moeda_br(total_patrimonio))
                 else:
-                    st.write(f"Pendentes: {len(df_pendente)}")
+                    st.warning("Cadastre suas contas bancárias para ver os saldos.")
+
+            # ---------------------------------------------------------
+            # MENU: RELATÓRIO MENSAL (DRE HIERÁRQUICO)
+            # ---------------------------------------------------------
+            elif menu == "Relatório Mensal":
+                st.title("📊 Realizado Mensal (Estrutura Hierárquica)")
+                if not df_lancamentos.empty and not df_categorias.empty:
+                    df_lancamentos["Mes_Ano"] = pd.to_datetime(df_lancamentos["Data"], dayfirst=True).dt.strftime('%m/%Y')
+                    df_lancamentos["Valor"] = df_lancamentos["Valor"].astype(float)
                     
-                    l_cats = [""] + df_categorias["Nome_Categoria"].tolist() if not df_categorias.empty else [""]
-                    l_cens = [""] + df_centros["Nome_Centro"].tolist() if not df_centros.empty else [""]
-
-                    with st.form("form_concilia"):
-                        atualizados = []
-                        for idx, row in df_pendente.iterrows():
-                            cols = st.columns([1, 2.5, 1, 1.5, 1.5])
-                            cols[0].text(row["Data"])
-                            cols[1].text(row["Descricao"])
-                            cols[2].text(formatar_moeda_br(row["Valor"]))
-                            
-                            sel_cat = cols[3].selectbox(f"Categoria", l_cats, key=f"cat_{idx}")
-                            sel_cen = cols[4].selectbox(f"Centro Custo", l_cens, key=f"cen_{idx}")
-                            
-                            if sel_cat != "" or sel_cen != "":
-                                atualizados.append({
-                                    "linha": idx + 2,
-                                    "categoria": sel_cat if sel_cat != "" else row["Categoria_ID"],
-                                    "centro": sel_cen if sel_cen != "" else row["Centro_Custo_ID"]
-                                })
-                            st.divider()
-
-                        if st.form_submit_button("💾 Salvar Conciliações"):
-                            ws_lanc = obter_aba(sh, NOME_ABA_LANCAMENTOS, CABECALHO_LANCAMENTOS)
-                            for acao in atualizados:
-                                ws_lanc.update_cell(acao["linha"], 4, acao["categoria"])
-                                ws_lanc.update_cell(acao["linha"], 5, acao["centro"])
-                            st.success("Conciliação salva com sucesso!")
-                            st.rerun()
-
-        # ---------------------------------------------------------
-        # MENU: RESUMO
-        # ---------------------------------------------------------
-        elif menu == "Resumo":
-            st.title("📊 Resumo Financeiro")
-            if not df_contas.empty:
-                c1, c2 = st.columns(2)
-                with c1:
-                    st.subheader("Saldos por Conta")
-                    saldos_lista = []
-                    for _, row in df_contas.iterrows():
-                        conta_nome = row["Nome_Conta"]
-                        saldo_inicial = para_float(row["Saldo_Inicial"])
-                        movimentacao = para_float(df_lancamentos[df_lancamentos["Conta_ID"] == conta_nome]["Valor"].sum())
-                        saldos_lista.append({"Conta": conta_nome, "Saldo Atual": saldo_inicial + movimentacao})
+                    map_codigos = dict(zip(df_categorias["Nome_Categoria"], df_categorias["Codigo"]))
+                    df_lancamentos["Codigo"] = df_lancamentos["Categoria_ID"].map(map_codigos).astype(str)
                     
-                    df_resumo_saldos = pd.DataFrame(saldos_lista)
-                    st.table(df_resumo_saldos.assign(Saldo_Atual=df_resumo_saldos["Saldo Atual"].apply(formatar_moeda_br))[["Conta", "Saldo_Atual"]])
-                
-                with c2:
-                    total_patrimonio = sum([x["Saldo Atual"] for x in saldos_lista])
-                    st.metric("Patrimônio Líquido", formatar_moeda_br(total_patrimonio))
-
-        # ---------------------------------------------------------
-        # MENU: RELATÓRIO MENSAL (DRE HIERÁRQUICO)
-        # ---------------------------------------------------------
-        elif menu == "Relatório Mensal":
-            st.title("📊 Realizado Mensal (Estrutura Hierárquica)")
-            if not df_lancamentos.empty and not df_categorias.empty:
-                df_lancamentos["Mes_Ano"] = pd.to_datetime(df_lancamentos["Data"], dayfirst=True).dt.strftime('%m/%Y')
-                df_lancamentos["Valor"] = df_lancamentos["Valor"].astype(float)
-                
-                map_codigos = dict(zip(df_categorias["Nome_Categoria"], df_categorias["Codigo"]))
-                df_lancamentos["Codigo"] = df_lancamentos["Categoria_ID"].map(map_codigos).astype(str)
-                
-                df_pivot_ana = df_lancamentos.pivot_table(
-                    index="Codigo", columns="Mes_Ano", values="Valor", aggfunc="sum", fill_value=0
-                )
-                
-                colunas_meses = sorted(df_pivot_ana.columns.tolist())
-                relatorio_final = []
-                
-                # Ordenação garantida como string
-                df_cats_ord = df_categorias.sort_values(by="Codigo")
-                
-                for _, cat in df_cats_ord.iterrows():
-                    codigo_pai = str(cat["Codigo"])
-                    nome_cat = cat["Nome_Categoria"]
-                    nivel = identificar_nivel(codigo_pai)
+                    df_pivot_ana = df_lancamentos.pivot_table(
+                        index="Codigo", columns="Mes_Ano", values="Valor", aggfunc="sum", fill_value=0
+                    )
                     
-                    linha_dre = {"Código": codigo_pai, "Descrição": ("  " * (nivel - 1)) + nome_cat}
+                    colunas_meses = sorted(df_pivot_ana.columns.tolist())
+                    relatorio_final = []
                     
-                    for mes in colunas_meses:
-                        mask = df_pivot_ana.index.astype(str).str.startswith(codigo_pai)
-                        valor_total = df_pivot_ana[mask][mes].sum()
-                        linha_dre[mes] = valor_total
+                    # Ordenação garantida como string
+                    df_cats_ord = df_categorias.sort_values(by="Codigo")
                     
-                    relatorio_final.append(linha_dre)
-                
-                df_dre = pd.DataFrame(relatorio_final)
-                st.dataframe(df_dre.style.format({m: formatar_moeda_br for m in colunas_meses}), use_container_width=True)
-
-        # ---------------------------------------------------------
-        # MENU: CADASTROS
-        # ---------------------------------------------------------
-        elif menu == "Cadastros":
-            st.title("⚙️ Gestão de Cadastros")
-            tab1, tab2, tab3 = st.tabs(["Contas Bancárias", "Plano de Contas", "Centros de Custo"])
-            
-            with tab1:
-                st.subheader("Nova Conta")
-                with st.form("form_add_conta"):
-                    f_n = st.text_input("Nome da Conta")
-                    f_b = st.text_input("Banco")
-                    f_s = st.number_input("Saldo Inicial", format="%.2f")
-                    if st.form_submit_button("Salvar Conta"):
-                        obter_aba(sh, NOME_ABA_CONTAS, CABECALHO_CONTAS).append_row([len(df_contas)+1, f_n, f_b, f_s])
-                        st.success("Conta salva!")
-                        st.rerun()
-                st.dataframe(df_contas)
-
-            with tab2:
-                st.subheader("Estrutura de Categorias")
-                st.write("Hierarquia por pontos: 3 (Nível 1) -> 3.01 (Nível 2) -> 3.01.01 (Nível 3) -> 3.01.01.001 (Analítico)")
-                with st.form("form_add_cat"):
-                    f_c = st.text_input("Código (ex: 3.01.01.001)")
-                    f_n = st.text_input("Nome da Categoria")
-                    f_t = st.selectbox("Tipo", ["Receita", "Despesa"])
-                    if st.form_submit_button("Salvar Categoria"):
-                        obter_aba(sh, NOME_ABA_CATEGORIAS, CABECALHO_CATEGORIAS).append_row([str(f_c), f_n, f_t])
-                        st.success("Categoria salva!")
-                        st.rerun()
-                
-                # Exibição segura garantindo que Codigo é string para ordenação
-                if not df_categorias.empty and "Codigo" in df_categorias.columns:
-                    df_categorias["Codigo"] = df_categorias["Codigo"].astype(str)
-                    st.dataframe(df_categorias.sort_values(by="Codigo"))
+                    for _, cat in df_cats_ord.iterrows():
+                        codigo_pai = str(cat["Codigo"])
+                        nome_cat = cat["Nome_Categoria"]
+                        nivel = identificar_nivel(codigo_pai)
+                        
+                        linha_dre = {"Código": codigo_pai, "Descrição": ("  " * (nivel - 1)) + nome_cat}
+                        
+                        for mes in colunas_meses:
+                            # Filtra no pivot todos os códigos que iniciam com o código da categoria atual
+                            mask = df_pivot_ana.index.astype(str).str.startswith(codigo_pai)
+                            valor_total = df_pivot_ana[mask][mes].sum()
+                            linha_dre[mes] = valor_total
+                        
+                        relatorio_final.append(linha_dre)
+                    
+                    df_dre = pd.DataFrame(relatorio_final)
+                    st.dataframe(df_dre.style.format({m: formatar_moeda_br for m in colunas_meses}), use_container_width=True)
                 else:
-                    st.error("A coluna 'Codigo' não foi encontrada ou está vazia.")
+                    st.info("Dados insuficientes para gerar o DRE.")
 
-            with tab3:
-                st.subheader("Novos Centros de Custo")
-                with st.form("form_add_cen"):
-                    f_n = st.text_input("Nome")
-                    if st.form_submit_button("Salvar"):
-                        obter_aba(sh, NOME_ABA_CENTROS, CABECALHO_CENTROS).append_row([len(df_centros)+1, f_n])
-                        st.success("Centro salvo!")
-                        st.rerun()
-                st.dataframe(df_centros)
+            # ---------------------------------------------------------
+            # MENU: CADASTROS
+            # ---------------------------------------------------------
+            elif menu == "Cadastros":
+                st.title("⚙️ Gestão de Cadastros")
+                tab1, tab2, tab3 = st.tabs(["Contas Bancárias", "Plano de Contas", "Centros de Custo"])
+                
+                with tab1:
+                    st.subheader("Nova Conta")
+                    with st.form("form_add_conta"):
+                        f_n = st.text_input("Nome da Conta")
+                        f_b = st.text_input("Banco")
+                        f_s = st.number_input("Saldo Inicial", format="%.2f")
+                        if st.form_submit_button("Salvar Conta"):
+                            obter_aba(sh, NOME_ABA_CONTAS, CABECALHO_CONTAS).append_row([len(df_contas)+1, f_n, f_b, f_s])
+                            st.success("Conta salva!")
+                            st.rerun()
+                    st.dataframe(df_contas)
+
+                with tab2:
+                    st.subheader("Estrutura de Categorias")
+                    st.write("Hierarquia por pontos: 3 (Nível 1) -> 3.01 (Nível 2) -> 3.01.01 (Nível 3) -> 3.01.01.001 (Analítico)")
+                    with st.form("form_add_cat"):
+                        f_c = st.text_input("Código (ex: 3.01.01.001)")
+                        f_n = st.text_input("Nome da Categoria")
+                        f_t = st.selectbox("Tipo", ["Receita", "Despesa"])
+                        if st.form_submit_button("Salvar Categoria"):
+                            obter_aba(sh, NOME_ABA_CATEGORIAS, CABECALHO_CATEGORIAS).append_row([str(f_c), f_n, f_t])
+                            st.success("Categoria salva!")
+                            st.rerun()
+                    
+                    if not df_categorias.empty and "Codigo" in df_categorias.columns:
+                        df_categorias["Codigo"] = df_categorias["Codigo"].astype(str)
+                        st.dataframe(df_categorias.sort_values(by="Codigo"))
+                    else:
+                        st.error("A coluna 'Codigo' não foi encontrada ou está vazia.")
+
+                with tab3:
+                    st.subheader("Novos Centros de Custo")
+                    with st.form("form_add_cen"):
+                        f_n = st.text_input("Nome")
+                        if st.form_submit_button("Salvar"):
+                            obter_aba(sh, NOME_ABA_CENTROS, CABECALHO_CENTROS).append_row([len(df_centros)+1, f_n])
+                            st.success("Centro salvo!")
+                            st.rerun()
+                    st.dataframe(df_centros)
+
+        except gspread.exceptions.APIError as e:
+            st.error("❌ Erro de Autenticação/Permissão com o Google Sheets.")
+            st.info("Certifique-se de que a planilha está compartilhada com o e-mail da sua Service Account.")
+            st.write(f"Detalhes técnicos: {e}")
