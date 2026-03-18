@@ -4,6 +4,7 @@ import gspread
 from google.oauth2.service_account import Credentials
 import re
 import html
+import numpy as np # Adicionado para cálculo de média
 
 # =========================================================
 # CONFIGURAÇÃO DA PÁGINA
@@ -32,8 +33,8 @@ CABECALHO_LANCAMENTOS = [
 ]
 
 CABECALHO_CONTAS = ["ID", "Nome_Conta", "Banco", "Saldo_Inicial"]
-# Suporta a estrutura hierárquica por pontos (ex: 3.01.01.001)
-CABECALHO_CATEGORIAS = ["Codigo", "Nome_Categoria", "Tipo", "Permite_Lancamento"]
+# Suporta a estrutura hierárquica por pontos (ex: 3.01.01.001) e coluna Nível
+CABECALHO_CATEGORIAS = ["Codigo", "Nome_Categoria", "Tipo", "Permite_Lancamento", "Nivel"]
 # AJUSTADO PARA O PADRÃO DA SUA PLANILHA (image_7b4dbe.png)
 CABECALHO_CENTROS = ["ID", "Centros_Custos"]
 
@@ -48,18 +49,19 @@ def formatar_moeda_br(valor):
     except:
         return "R$ 0,00"
 
-def identificar_nivel(codigo):
-    """
-    Identifica o nível contábil pela quantidade de blocos no código:
-    3             -> Nível 1
-    3.01          -> Nível 2
-    3.01.01       -> Nível 3
-    3.01.01.001   -> Nível 4 (Analítico)
-    """
-    cod_str = str(codigo).strip()
-    if not cod_str or cod_str == "None" or cod_str == "nan":
-        return 0
-    return len(cod_str.split('.'))
+# Função descontinuada em favor da coluna 'Nivel' na planilha
+# def identificar_nivel(codigo):
+#     """
+#     Identifica o nível contábil pela quantidade de blocos no código:
+#     3             -> Nível 1
+#     3.01          -> Nível 2
+#     3.01.01       -> Nível 3
+#     3.01.01.001   -> Nível 4 (Analítico)
+#     """
+#     cod_str = str(codigo).strip()
+#     if not cod_str or cod_str == "None" or cod_str == "nan":
+#         return 0
+#     return len(cod_str.split('.'))
 
 # =========================================================
 # GOOGLE SHEETS COM SUPORTE A CACHE (USO EM MEMÓRIA)
@@ -100,6 +102,8 @@ def carregar_dados_cache(nome_aba, cabecalho):
         try:
             ws = sh.worksheet(nome_aba)
         except Exception:
+            # Tenta criar a aba com o cabeçalho correto se ela não existir
+            st.warning(f"Aba {nome_aba} não encontrada. Criando com cabeçalho padrão.")
             ws = sh.add_worksheet(title=nome_aba, rows=5000, cols=20)
             ws.append_row(cabecalho)
         
@@ -119,6 +123,7 @@ def carregar_dados_cache(nome_aba, cabecalho):
         return df
     except Exception as e:
         st.error(f"Erro ao carregar dados da aba {nome_aba}: {e}")
+        # Retorna um DataFrame vazio com as colunas corretas para evitar erros no resto do script
         return pd.DataFrame(columns=cabecalho)
 
 # =========================================================
@@ -367,6 +372,12 @@ if check_password():
     df_centros = carregar_dados_cache(NOME_ABA_CENTROS, CABECALHO_CENTROS)
     df_lancamentos = carregar_dados_cache(NOME_ABA_LANCAMENTOS, CABECALHO_LANCAMENTOS)
 
+    # Nome exato da coluna de Centros de Custo
+    COL_NOME_CEN = "Centros_Custos" if "Centros_Custos" in df_centros.columns else "Nome_Centro"
+    
+    # Lista de Centros de Custo para filtros e seletores
+    l_cens_seletor = df_centros[COL_NOME_CEN].tolist() if not df_centros.empty and COL_NOME_CEN in df_centros.columns else []
+
     # Forçar Codigo para String para evitar erros de ordenação (TypeError)
     if not df_categorias.empty and "Codigo" in df_categorias.columns:
         df_categorias["Codigo"] = df_categorias["Codigo"].astype(str)
@@ -446,15 +457,11 @@ if check_password():
             else:
                 st.write(f"Lançamentos para tratar: {len(df_pendente)}")
                 
-                # Listas de seleção
                 l_cats = ["", "TRANSFERÊNCIA"] + df_categorias_analiticas["Nome_Categoria"].tolist() if not df_categorias_analiticas.empty else ["", "TRANSFERÊNCIA"]
                 l_contas = df_contas["Nome_Conta"].tolist() if not df_contas.empty else []
                 
-                if not df_centros.empty:
-                    col_nome_cen = "Centros_Custos" if "Centros_Custos" in df_centros.columns else "Nome_Centro"
-                    l_cens = [""] + df_centros[col_nome_cen].tolist() if col_nome_cen in df_centros.columns else [""]
-                else:
-                    l_cens = [""]
+                # Lista para seletores na conciliação (com vazio)
+                l_cens = [""] + l_cens_seletor
 
                 # Exibição linha por linha com botão de confirmação individual
                 for idx, row in df_pendente.iterrows():
@@ -500,8 +507,8 @@ if check_password():
                                     ]
                                     ws_l.append_row(contrapartida, value_input_option="USER_ENTERED")
                                 
-                                st.cache_data.clear()
-                                st.success("Conciliado!")
+                                st.cache_data.clear() # Limpa cache para refletir a alteração
+                                st.success(f"Linha {linha_index} conciliada!")
                                 st.rerun()
                         st.divider()
 
@@ -526,11 +533,7 @@ if check_password():
                 l_cats = ["", "TRANSFERÊNCIA"] + df_categorias_analiticas["Nome_Categoria"].tolist() if not df_categorias_analiticas.empty else ["", "TRANSFERÊNCIA"]
                 l_contas = df_contas["Nome_Conta"].tolist() if not df_contas.empty else []
                 
-                if not df_centros.empty:
-                    col_nome_cen = "Centros_Custos" if "Centros_Custos" in df_centros.columns else "Nome_Centro"
-                    l_cens = [""] + df_centros[col_nome_cen].tolist() if col_nome_cen in df_centros.columns else [""]
-                else:
-                    l_cens = [""]
+                l_cens = [""] + l_cens_seletor
 
                 for idx, row in df_conciliado.iterrows():
                     linha_index = idx + 2
@@ -590,19 +593,33 @@ if check_password():
             st.warning("Cadastre suas contas bancárias para ver os saldos.")
 
     # ---------------------------------------------------------
-    # MENU: RELATÓRIO MENSAL (DRE HIERÁRQUICO)
+    # MENU: RELATÓRIO MENSAL (DRE HIERÁRQUICO MELHORADO)
     # ---------------------------------------------------------
     elif menu == "Relatório Mensal":
         st.title("📊 Realizado Mensal (Estrutura Hierárquica)")
+        
+        # Filtro de Centro de Custo na barra lateral
+        centro_filtro = st.sidebar.selectbox("Filtrar por Centro de Custo:", ["Todos"] + l_cens_seletor)
+        
         if not df_lancamentos.empty and not df_categorias.empty:
-            # Filtro para ignorar transferências no DRE
+            
+            # Filtros Base: Ignorar transferências
             df_dre_input = df_lancamentos[df_lancamentos["Categoria_ID"] != "TRANSFERÊNCIA"].copy()
             
-            df_dre_input["Mes_Ano"] = pd.to_datetime(df_dre_input["Data"], dayfirst=True).dt.strftime('%m/%Y')
+            # Filtro adicional de Centro de Custo se selecionado
+            if centro_filtro != "Todos":
+                df_dre_input = df_dre_input[df_dre_input["Centro_Custo_ID"] == centro_filtro]
             
+            if df_dre_input.empty:
+                st.warning("Nenhum lançamento encontrado para os filtros selecionados.")
+                st.stop()
+            
+            # Adiciona colunas de mês/ano e código para pivoteamento
+            df_dre_input["Mes_Ano"] = pd.to_datetime(df_dre_input["Data"], dayfirst=True).dt.strftime('%m/%Y')
             map_codigos = dict(zip(df_categorias["Nome_Categoria"], df_categorias["Codigo"]))
             df_dre_input["Codigo"] = df_dre_input["Categoria_ID"].map(map_codigos).astype(str)
             
+            # Cria a tabela dinâmica (pivot table)
             df_pivot_ana = df_dre_input.pivot_table(
                 index="Codigo", columns="Mes_Ano", values="Valor", aggfunc="sum", fill_value=0
             )
@@ -610,24 +627,56 @@ if check_password():
             colunas_meses = sorted(df_pivot_ana.columns.tolist())
             relatorio_final = []
             
+            # Ordena as categorias pelo código para processamento hierárquico
             df_cats_ord = df_categorias.sort_values(by="Codigo")
             
+            # Garante que a coluna Nível existe e é numérica
+            if "Nivel" in df_cats_ord.columns:
+                df_cats_ord["Nivel"] = pd.to_numeric(df_cats_ord["Nivel"], errors='coerce').fillna(4).astype(int)
+            else:
+                st.error("A aba Categorias precisa ter a coluna 'Nivel' (1 a 4).")
+                st.stop()
+            
+            # Processa cada categoria hierarquicamente
             for _, cat in df_cats_ord.iterrows():
                 codigo_pai = str(cat["Codigo"])
                 nome_cat = cat["Nome_Categoria"]
-                nivel = identificar_nivel(codigo_pai)
+                nivel = cat["Nivel"]
                 
-                linha_dre = {"Código": codigo_pai, "Descrição": ("  " * (nivel - 1)) + nome_cat}
+                # Formatação da descrição com base no nível (indentação)
+                prefixo = "  " * (nivel - 1)
                 
+                linha_dre = {"Código": codigo_pai, "Descrição": prefixo + nome_cat, "Nível": nivel}
+                
+                # Soma os valores para cada mês considerando a hierarquia (começa com o código pai)
+                valores_linha = []
                 for mes in colunas_meses:
+                    # Filtra lançamentos cujo código começa com o código pai desta linha
                     mask = df_pivot_ana.index.astype(str).str.startswith(codigo_pai)
                     valor_total = df_pivot_ana[mask][mes].sum()
                     linha_dre[mes] = valor_total
+                    valores_linha.append(valor_total)
+                
+                # Cálculos de Total e Média (solicitados)
+                total_linha = sum(valores_linha)
+                linha_dre["Total Acumulado"] = total_linha
+                
+                # Média mensal: ignora meses com valor zero para não distorcer a média
+                valores_positivos = [v for v in valores_linha if v != 0]
+                media_linha = sum(valores_positivos) / len(valores_positivos) if valores_positivos else 0
+                linha_dre["Média Mensal"] = media_linha
                 
                 relatorio_final.append(linha_dre)
             
+            # Cria o DataFrame final do DRE
             df_dre = pd.DataFrame(relatorio_final)
-            st.dataframe(df_dre.style.format({m: formatar_moeda_br for m in colunas_meses}), use_container_width=True)
+            
+            # Lista de colunas numéricas para formatação
+            colunas_formato = colunas_meses + ["Total Acumulado", "Média Mensal"]
+            
+            # Aplica a formatação de moeda
+            st.dataframe(df_dre.style.format({m: formatar_moeda_br for m in colunas_formato}), use_container_width=True)
+            
         else:
             st.info("Dados insuficientes para gerar o DRE.")
 
@@ -648,8 +697,9 @@ if check_password():
                     gc = conectar_planilha()
                     sh = gc.open_by_key(ID_DA_PLANILHA)
                     ws_c = sh.worksheet(NOME_ABA_CONTAS)
+                    # Adiciona nova linha com ID incremental
                     ws_c.append_row([len(df_contas)+1, f_n, f_b, f_s])
-                    st.cache_data.clear()
+                    st.cache_data.clear() # Força recarregamento
                     st.success("Conta salva!")
                     st.rerun()
             st.dataframe(df_contas)
@@ -657,36 +707,49 @@ if check_password():
         with tab2:
             st.subheader("Estrutura de Categorias")
             st.write("Hierarquia por pontos: 3 (Nível 1) -> 3.01 (Nível 2) -> 3.01.01 (Nível 3) -> 3.01.01.001 (Analítico)")
+            st.info("O campo Nível (1 a 4) é obrigatório para a formatação do relatório.")
             with st.form("form_add_cat"):
                 f_c = st.text_input("Código (ex: 3.01.01.001)")
                 f_n = st.text_input("Nome da Categoria")
                 f_t = st.selectbox("Tipo", ["Receita", "Despesa"])
                 permite = st.checkbox("Esta categoria aceita lançamentos diretos? (Analítica)", value=True)
                 
+                # Novo campo: Nível (solicitado)
+                f_v = st.number_input("Nível (1 a 4)", min_value=1, max_value=4, value=4, step=1)
+                
                 if st.form_submit_button("Salvar Categoria"):
-                    txt_permite = "SIM" if permite else "NÃO"
-                    gc = conectar_planilha()
-                    sh = gc.open_by_key(ID_DA_PLANILHA)
-                    ws_cat = sh.worksheet(NOME_ABA_CATEGORIAS)
-                    ws_cat.append_row([str(f_c), f_n, f_t, txt_permite])
-                    st.cache_data.clear()
-                    st.success("Categoria salva!")
-                    st.rerun()
+                    if not f_c or not f_n:
+                        st.error("Código e Nome são obrigatórios.")
+                    else:
+                        txt_permite = "SIM" if permite else "NÃO"
+                        gc = conectar_planilha()
+                        sh = gc.open_by_key(ID_DA_PLANILHA)
+                        ws_cat = sh.worksheet(NOME_ABA_CATEGORIAS)
+                        # Salva incluindo o nível (solicitado)
+                        ws_cat.append_row([str(f_c), f_n, f_t, txt_permite, f_v])
+                        st.cache_data.clear() # Força recarregamento
+                        st.success("Categoria salva!")
+                        st.rerun()
             
+            # Exibe tabela ordenada pelo código para facilitar a visualização hierárquica
             if not df_categorias.empty and "Codigo" in df_categorias.columns:
                 df_categorias["Codigo"] = df_categorias["Codigo"].astype(str)
-                st.dataframe(df_categorias.sort_values(by="Codigo"))
+                st.dataframe(df_categorias.sort_values(by="Codigo"), use_container_width=True)
 
         with tab3:
             st.subheader("Novos Centros de Custo")
             with st.form("form_add_cen"):
                 f_n = st.text_input("Nome")
                 if st.form_submit_button("Salvar"):
-                    gc = conectar_planilha()
-                    sh = gc.open_by_key(ID_DA_PLANILHA)
-                    ws_cen = sh.worksheet(NOME_ABA_CENTROS)
-                    ws_cen.append_row([len(df_centros)+1, f_n])
-                    st.cache_data.clear()
-                    st.success("Centro salvo!")
-                    st.rerun()
+                    if not f_n:
+                        st.error("Nome é obrigatório.")
+                    else:
+                        gc = conectar_planilha()
+                        sh = gc.open_by_key(ID_DA_PLANILHA)
+                        ws_cen = sh.worksheet(NOME_ABA_CENTROS)
+                        # Salva com ID incremental
+                        ws_cen.append_row([len(df_centros)+1, f_n])
+                        st.cache_data.clear() # Força recarregamento
+                        st.success("Centro salvo!")
+                        st.rerun()
             st.dataframe(df_centros)
