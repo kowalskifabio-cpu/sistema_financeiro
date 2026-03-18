@@ -55,7 +55,7 @@ def identificar_nivel(codigo):
     3.01.01.001   -> Nível 4 (Analítico)
     """
     cod_str = str(codigo).strip()
-    if not cod_str:
+    if not cod_str or cod_str == "None":
         return 0
     return len(cod_str.split('.'))
 
@@ -291,7 +291,7 @@ def carregar_dados_aba(sh, nome_aba, cabecalho):
     return pd.DataFrame(registros)
 
 def gravar_transacoes_na_planilha(df_import):
-    """Grava as transações importadas evitando duplicidade por FITID ou dados."""
+    """Grava as transações importadas evitando duplicidade."""
     gc = conectar_planilha()
     if not gc:
         return
@@ -307,10 +307,8 @@ def gravar_transacoes_na_planilha(df_import):
             return
 
         df_import = df_import.copy()
-        df_import["FITID"] = df_import.get("FITID", "").astype(str).str.strip()
 
         if not df_planilha.empty:
-            # Chave composta para verificação de duplicidade
             chave_import = df_import["Data"].astype(str) + "|" + df_import["Valor"].astype(str) + "|" + df_import["Descricao"].astype(str)
             chave_planilha = df_planilha["Data"].astype(str) + "|" + df_planilha["Valor"].astype(str) + "|" + df_planilha["Descricao"].astype(str)
             novos = df_import[~chave_import.isin(chave_planilha)]
@@ -343,6 +341,10 @@ if check_password():
         df_centros = carregar_dados_aba(sh, NOME_ABA_CENTROS, CABECALHO_CENTROS)
         df_lancamentos = carregar_dados_aba(sh, NOME_ABA_LANCAMENTOS, CABECALHO_LANCAMENTOS)
 
+        # CORREÇÃO CRUCIAL: Forçar a coluna Codigo para String (Texto) para evitar o erro de ordenação
+        if not df_categorias.empty and "Codigo" in df_categorias.columns:
+            df_categorias["Codigo"] = df_categorias["Codigo"].astype(str)
+
         st.sidebar.title("Navegação")
         menu = st.sidebar.radio(
             "Ir para:",
@@ -362,7 +364,6 @@ if check_password():
                 if not df_import.empty:
                     st.subheader("Transações Detectadas")
                     
-                    # Vínculo obrigatório com Banco/Conta
                     conta_sel = st.selectbox(
                         "Vincular à Conta Bancária:", 
                         df_contas["Nome_Conta"].tolist() if not df_contas.empty else ["Nenhuma conta cadastrada"]
@@ -370,7 +371,6 @@ if check_password():
                     
                     df_import["Conta_ID"] = conta_sel
 
-                    # Visualização
                     col_exib = ["Data", "Descricao", "Valor", "Tipo"]
                     st.dataframe(df_import[col_exib], use_container_width=True)
 
@@ -396,7 +396,6 @@ if check_password():
             st.info("Trate lançamentos que ainda não possuem Categoria ou Centro de Custo.")
 
             if not df_lancamentos.empty:
-                # Filtragem de vazios
                 mask = (df_lancamentos["Categoria_ID"] == "") | (df_lancamentos["Centro_Custo_ID"] == "")
                 df_pendente = df_lancamentos[mask].copy()
 
@@ -421,7 +420,7 @@ if check_password():
                             
                             if sel_cat != "" or sel_cen != "":
                                 atualizados.append({
-                                    "linha": idx + 2, # Planilha começa em 1, header é 1.
+                                    "linha": idx + 2,
                                     "categoria": sel_cat if sel_cat != "" else row["Categoria_ID"],
                                     "centro": sel_cen if sel_cen != "" else row["Centro_Custo_ID"]
                                 })
@@ -430,7 +429,6 @@ if check_password():
                         if st.form_submit_button("💾 Salvar Conciliações"):
                             ws_lanc = obter_aba(sh, NOME_ABA_LANCAMENTOS, CABECALHO_LANCAMENTOS)
                             for acao in atualizados:
-                                # Colunas: D=4 (Categoria), E=5 (Centro Custo)
                                 ws_lanc.update_cell(acao["linha"], 4, acao["categoria"])
                                 ws_lanc.update_cell(acao["linha"], 5, acao["centro"])
                             st.success("Conciliação salva com sucesso!")
@@ -458,8 +456,6 @@ if check_password():
                 with c2:
                     total_patrimonio = sum([x["Saldo Atual"] for x in saldos_lista])
                     st.metric("Patrimônio Líquido", formatar_moeda_br(total_patrimonio))
-            else:
-                st.warning("Cadastre suas contas bancárias para ver os saldos.")
 
         # ---------------------------------------------------------
         # MENU: RELATÓRIO MENSAL (DRE HIERÁRQUICO)
@@ -467,15 +463,12 @@ if check_password():
         elif menu == "Relatório Mensal":
             st.title("📊 Realizado Mensal (Estrutura Hierárquica)")
             if not df_lancamentos.empty and not df_categorias.empty:
-                # Tratamento de datas e valores
                 df_lancamentos["Mes_Ano"] = pd.to_datetime(df_lancamentos["Data"], dayfirst=True).dt.strftime('%m/%Y')
                 df_lancamentos["Valor"] = df_lancamentos["Valor"].astype(float)
                 
-                # Linkar categoria do lançamento ao código do plano de contas
                 map_codigos = dict(zip(df_categorias["Nome_Categoria"], df_categorias["Codigo"]))
-                df_lancamentos["Codigo"] = df_lancamentos["Categoria_ID"].map(map_codigos)
+                df_lancamentos["Codigo"] = df_lancamentos["Categoria_ID"].map(map_codigos).astype(str)
                 
-                # Base de dados analíticos (nível 4)
                 df_pivot_ana = df_lancamentos.pivot_table(
                     index="Codigo", columns="Mes_Ano", values="Valor", aggfunc="sum", fill_value=0
                 )
@@ -483,7 +476,7 @@ if check_password():
                 colunas_meses = sorted(df_pivot_ana.columns.tolist())
                 relatorio_final = []
                 
-                # Ordenação rigorosa pelo Código
+                # Ordenação garantida como string
                 df_cats_ord = df_categorias.sort_values(by="Codigo")
                 
                 for _, cat in df_cats_ord.iterrows():
@@ -494,7 +487,6 @@ if check_password():
                     linha_dre = {"Código": codigo_pai, "Descrição": ("  " * (nivel - 1)) + nome_cat}
                     
                     for mes in colunas_meses:
-                        # Filtra no pivot todos os códigos que iniciam com o código da categoria atual
                         mask = df_pivot_ana.index.astype(str).str.startswith(codigo_pai)
                         valor_total = df_pivot_ana[mask][mes].sum()
                         linha_dre[mes] = valor_total
@@ -503,8 +495,6 @@ if check_password():
                 
                 df_dre = pd.DataFrame(relatorio_final)
                 st.dataframe(df_dre.style.format({m: formatar_moeda_br for m in colunas_meses}), use_container_width=True)
-            else:
-                st.info("Dados insuficientes para gerar o DRE.")
 
         # ---------------------------------------------------------
         # MENU: CADASTROS
@@ -533,16 +523,16 @@ if check_password():
                     f_n = st.text_input("Nome da Categoria")
                     f_t = st.selectbox("Tipo", ["Receita", "Despesa"])
                     if st.form_submit_button("Salvar Categoria"):
-                        obter_aba(sh, NOME_ABA_CATEGORIAS, CABECALHO_CATEGORIAS).append_row([f_c, f_n, f_t])
+                        obter_aba(sh, NOME_ABA_CATEGORIAS, CABECALHO_CATEGORIAS).append_row([str(f_c), f_n, f_t])
                         st.success("Categoria salva!")
                         st.rerun()
                 
-                # VERIFICAÇÃO DE SEGURANÇA PARA O ERRO KEYERROR: 'Codigo'
+                # Exibição segura garantindo que Codigo é string para ordenação
                 if not df_categorias.empty and "Codigo" in df_categorias.columns:
+                    df_categorias["Codigo"] = df_categorias["Codigo"].astype(str)
                     st.dataframe(df_categorias.sort_values(by="Codigo"))
                 else:
-                    st.error("A coluna 'Codigo' não foi encontrada na planilha. Verifique o cabeçalho na aba 'Categorias'.")
-                    st.dataframe(df_categorias)
+                    st.error("A coluna 'Codigo' não foi encontrada ou está vazia.")
 
             with tab3:
                 st.subheader("Novos Centros de Custo")
