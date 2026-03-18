@@ -189,27 +189,26 @@ def formatar_data_ofx(dt_raw):
 def para_float(valor):
     """
     Converte strings financeiras variadas para float puro.
-    Lida com a divergência onde -11,69 é interpretado como -1169.
+    Lida com o erro onde centavos são multiplicados por 100 pela leitura incorreta.
     """
     if valor is None or valor == "":
         return 0.0
 
-    # Se já for float ou int, apenas retorna
-    if isinstance(valor, (int, float)):
-        return float(valor)
-
-    # Limpeza de string
-    s = str(valor).strip().replace("R$", "").replace(" ", "")
-    
-    try:
-        # Lógica Robusta: Se tiver vírgula e ponto, o ponto é milhar.
-        # Se tiver apenas vírgula, a vírgula é o decimal.
+    # Se for string, limpa formatação brasileira
+    if isinstance(valor, str):
+        s = valor.strip().replace("R$", "").replace(" ", "")
         if "," in s:
-            if "." in s:
-                s = s.replace(".", "") # Remove ponto de milhar
-            s = s.replace(",", ".") # Troca vírgula decimal por ponto
-        return float(s)
-    except Exception:
+            # Padrão brasileiro: remove ponto de milhar, troca vírgula por ponto
+            s = s.replace(".", "").replace(",", ".")
+        try:
+            return float(s)
+        except:
+            return 0.0
+    
+    # Se já vier como número (float/int) do gspread
+    try:
+        return float(valor)
+    except:
         return 0.0
 
 
@@ -292,15 +291,17 @@ def obter_aba(sh, nome_aba, cabecalho):
         return ws
 
 def carregar_dados_aba(sh, nome_aba, cabecalho):
-    """Lê todos os registros de uma aba específica e força saneamento de valores."""
+    """Lê todos os registros forçando a captura de valores como texto formatado."""
     ws = obter_aba(sh, nome_aba, cabecalho)
-    registros = ws.get_all_records()
+    # CRITICAL FIX: Captura os valores exatamente como aparecem na tela da planilha
+    registros = ws.get_all_records(value_render_option="FORMATTED_VALUE")
+    
     if not registros:
         return pd.DataFrame(columns=cabecalho)
     
     df = pd.DataFrame(registros)
     
-    # Saneamento preventivo na coluna Valor (se existir)
+    # Aplica o saneamento robusto em colunas financeiras
     if "Valor" in df.columns:
         df["Valor"] = df["Valor"].apply(para_float)
     if "Saldo_Inicial" in df.columns:
@@ -450,7 +451,7 @@ if check_password():
                                 c = st.columns([1, 2.5, 1, 1.5, 1.5, 0.8])
                                 c[0].text(row["Data"])
                                 c[1].text(row["Descricao"])
-                                # O valor aqui já foi saneado no carregar_dados_aba
+                                # Exibe o valor formatado corretamente
                                 c[2].text(formatar_moeda_br(row["Valor"]))
                                 
                                 sel_cat = c[3].selectbox(f"Categoria", l_cats, key=f"cat_p_{idx}")
@@ -530,7 +531,7 @@ if check_password():
                         saldos_lista = []
                         for _, row in df_contas.iterrows():
                             conta_nome = row["Nome_Conta"]
-                            saldo_inicial = row["Saldo_Inicial"] # Já é float pelo saneamento
+                            saldo_inicial = row["Saldo_Inicial"] 
                             movimentacao = df_lancamentos[df_lancamentos["Conta_ID"] == conta_nome]["Valor"].sum()
                             saldos_lista.append({"Conta": conta_nome, "Saldo Atual": saldo_inicial + movimentacao})
                         
