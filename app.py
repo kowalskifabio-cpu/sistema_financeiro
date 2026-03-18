@@ -5,6 +5,7 @@ from google.oauth2.service_account import Credentials
 import re
 import html
 import numpy as np # Adicionado para cálculo de média
+from io import BytesIO
 
 # =========================================================
 # CONFIGURAÇÃO DA PÁGINA
@@ -601,13 +602,15 @@ if check_password():
         if not df_lancamentos.empty and not df_categorias.empty:
             
             # --- FILTROS NO TOPO DO RELATÓRIO ---
-            col_f1, col_f2 = st.columns(2)
+            col_f1, col_f2, col_f3 = st.columns([1.5, 2, 1])
             with col_f1:
                 centro_filtro = st.selectbox("Filtrar por Centro de Custo:", ["Todos"] + l_cens_seletor)
             with col_f2:
                 # Opções de níveis baseadas no que existe na planilha
                 niveis_disponiveis = sorted(df_categorias["Nivel"].unique().tolist())
                 niveis_selecionados = st.multiselect("Filtrar por Níveis:", niveis_disponiveis, default=niveis_disponiveis)
+            with col_f3:
+                ocultar_zerados = st.checkbox("Ocultar lançamentos zerados", value=False)
             
             # Filtros Base: Ignorar transferências
             df_dre_input = df_lancamentos[df_lancamentos["Categoria_ID"] != "TRANSFERÊNCIA"].copy()
@@ -647,7 +650,7 @@ if check_password():
             for _, cat in df_cats_ord.iterrows():
                 codigo_pai = str(cat["Codigo"])
                 nome_cat = cat["Nome_Categoria"]
-                nivel = cat["Nivel"]
+                nivel = int(cat["Nivel"])
                 
                 # --- APLICA FILTRO DE NÍVEL ---
                 if nivel not in niveis_selecionados:
@@ -662,6 +665,7 @@ if check_password():
                 # Soma os valores para cada mês considerando a hierarquia (começa com o código pai)
                 valores_linha = []
                 for mes in colunas_meses:
+                    # Filtra lançamentos cujo código começa com o código pai desta linha
                     mask = df_pivot_ana.index.astype(str).str.startswith(codigo_pai)
                     valor_total = df_pivot_ana[mask][mes].sum()
                     linha_dre[mes] = valor_total
@@ -669,8 +673,14 @@ if check_password():
                 
                 # Cálculos de Total e Média
                 total_linha = sum(valores_linha)
+                
+                # --- FILTRO DE ZERADOS ---
+                if ocultar_zerados and total_linha == 0:
+                    continue
+                
                 linha_dre["Total Acumulado"] = total_linha
                 
+                # Média mensal: ignora meses com valor zero para não distorcer a média
                 valores_positivos = [v for v in valores_linha if v != 0]
                 media_linha = sum(valores_positivos) / len(valores_positivos) if valores_positivos else 0
                 linha_dre["Média Mensal"] = media_linha
@@ -684,18 +694,28 @@ if check_password():
                 st.warning("Nenhum dado a exibir para os níveis selecionados.")
                 st.stop()
 
+            # Botão de Exportar Excel
+            output = BytesIO()
+            with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+                df_dre.to_excel(writer, index=False, sheet_name='Relatorio_Mensal')
+            st.download_button(label="📥 Exportar para Excel", data=output.getvalue(), file_name="relatorio_mensal.xlsx", mime="application/vnd.ms-excel")
+
             # Lista de colunas numéricas para formatação
             colunas_formato = colunas_meses + ["Total Acumulado", "Média Mensal"]
             
             # LÓGICA DE ESTILIZAÇÃO POR NÍVEL
             def aplicar_cores(row):
                 nivel = row["Nível"]
+                # Nível 1: Azul Marinho / Branco / Negrito
                 if nivel == 1:
                     return ['background-color: #002060; color: white; font-weight: bold'] * len(row)
+                # Nível 2: Azul Claro / Preto / Negrito
                 if nivel == 2:
                     return ['background-color: #BDD7EE; color: black; font-weight: bold'] * len(row)
+                # Nível 3: Cinza / Preto / Negrito
                 if nivel == 3:
                     return ['background-color: #D9D9D9; color: black; font-weight: bold'] * len(row)
+                # Nível 4: Branco / Preto / Normal
                 return ['background-color: white; color: black'] * len(row)
 
             # Aplica os estilos e a formatação de moeda
